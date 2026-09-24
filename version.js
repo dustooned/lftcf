@@ -2,12 +2,15 @@
 // can say which build they're on and anyone can find it again (the lftcf repo tags each one).
 // Bump SAVE_FORMAT only when the saved data shape changes in a way older Forges can't read,
 // and add a migration in upgrade().
-export const VERSION = '0.6.0';
+export const VERSION = '0.6.1';
 export const CODENAME = 'Shuffle & Stack';
 export const RELEASED = '2026-09-23';
 export const SAVE_FORMAT = 1;
 
 export const CHANGELOG = [
+  { v: '0.6.1', name: 'Shuffle & Stack', date: '2026-09-23', notes: [
+    'Emoji labels on the card-type filter: 🃏 All · 🥊 CHA · 😈 EXE · ⚡ ACT (hover for what each means).',
+  ] },
   { v: '0.6.0', name: 'Shuffle & Stack', date: '2026-09-23', notes: [
     'Folders are now Decks, with a 20-card meter that turns ✓ when a deck is tournament-legal.',
     'Drag cards onto decks: click-and-drag with a mouse, or hold then drag on touch. Choose Add, Move or Duplicate.',

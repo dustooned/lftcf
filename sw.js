@@ -1,5 +1,5 @@
 // Network-first offline cache: always fresh when online, still opens with no signal.
-const CACHE = 'card-forge-0.6.0'; // keep in step with version.js
+const CACHE = 'card-forge-0.6.1'; // keep in step with version.js
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
 self.addEventListener('fetch', e => {
