@@ -39,7 +39,7 @@
   <!-- LIBRARY -->
   <section id="view-library" class="view">
     <div class="panel lib">
-      <aside class="folders" id="folders" aria-label="Folders"></aside>
+      <aside class="folders" id="folders" aria-label="Decks"></aside>
       <div class="lib-main">
         <div class="panel-h"><span id="libTitle">&#128193; All cards</span><span id="libCount" class="muted-h"></span></div>
         <button class="btn filter-toggle" id="filterToggle" aria-expanded="false" aria-controls="filters">&#128269; Search &amp; filter</button>
@@ -60,7 +60,7 @@
           <button class="btn" id="surprise">&#127922; Surprise me</button>
           <span id="folderActs" class="btnrow"></span>
           <span class="spacer"></span>
-          <label class="zoom" title="Card size"><span aria-hidden="true">&#128269;</span><input type="range" id="zoom" min="90" max="320" step="2" aria-label="Card size"></label>
+          <span class="zoom" title="Card size"><button class="icon-btn" id="zoomOut" title="Smaller cards" aria-label="Smaller cards">&#128269;&#8722;</button><input type="range" id="zoom" min="90" max="320" step="2" aria-label="Card size"><button class="icon-btn" id="zoomIn" title="Bigger cards" aria-label="Bigger cards">&#128269;+</button></span>
           <button class="btn" id="selectBtn" aria-pressed="false">&#9745; Select</button>
         </div>
         <div class="selbar" id="selbar" hidden></div>
@@ -160,7 +160,7 @@
           <div class="inline"><input type="text" id="sheetUrl" placeholder="https://docs.google.com/spreadsheets/d/&hellip;" aria-label="Google Sheet link"><button class="btn primary" id="sheetPull">&#10227; Pull now</button></div>
           <label class="inline small" style="margin-top:8px"><input type="checkbox" id="sheetAuto"> Pull automatically whenever the Forge opens</label>
           <p class="muted small" id="sheetStatus">Not linked yet.</p>
-          <p class="muted small">The sheet wins for stats &amp; text. Art, style and folders always stay from the Forge. The link travels inside save files, so collaborators get it too.</p>
+          <p class="muted small">The sheet wins for stats &amp; text. Art, style and decks always stay from the Forge. The link travels inside save files, so collaborators get it too.</p>
         </div>
       </div>
     </div>
@@ -178,16 +178,16 @@
           <button class="btn primary" id="dlZip">&#11015; Download ZIP</button>
           <button class="btn" id="copyJson">&#128203; Copy cards.json</button>
         </div>
-        <p class="muted small">Want just one folder? Open it in the Cards tab and use <b>Export folder</b>.</p>
+        <p class="muted small">Want just one deck? Open it in the Cards tab and use <b>Export deck</b>.</p>
       </div>
     </div>
     <div class="panel" id="pVersions">
-      <div class="panel-h">&#128452; Versions &amp; backups</div>
+      <div class="panel-h">&#128248; Snapshots &amp; backups</div>
       <div class="pad">
-        <p>Snapshot your whole set, or one deck/folder (open it in Cards &rarr; <b>Save version</b>), before big changes. Restore any version later, or download them all as one archive.</p>
+        <p>Take a snapshot of your whole set, or of one deck (open it in Cards &rarr; <b>📸 Snapshot</b>), before big changes. Roll back to any snapshot later, or download them all as one archive.</p>
         <div class="btnrow">
-          <button class="btn primary" id="saveSetVersion">&#128452; Save version of whole set</button>
-          <button class="btn" id="archiveVersions">&#11015; Download all versions (ZIP)</button>
+          <button class="btn primary" id="saveSetVersion">&#128248; Snapshot the whole set</button>
+          <button class="btn" id="archiveVersions">&#11015; Download all snapshots (ZIP)</button>
         </div>
         <div id="versionList" class="vlist"></div>
       </div>
@@ -224,6 +224,7 @@
   <div id="helpCard" class="help-card"></div>
 </div>
 
+<div id="dropTray" class="drop-tray" hidden aria-live="polite"></div>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 <dialog id="modal"><form method="dialog" id="modalForm"></form></dialog>
 <input type="file" id="filePick" hidden multiple accept=".json,.zip,.png,.jpg,.jpeg,.gif,.webp,.csv,.xlsx,.xls,.ods,image/*">

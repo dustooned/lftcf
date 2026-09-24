@@ -1,7 +1,7 @@
 import { W, H, FONTS, SHAPES, SHAPE_LABELS, TIMING_LABEL, esc, cardInner, cardSVG, backSVG, handlesMarkup, layerTransform, accentFor, shapeIcon, shapeMarkup, isHolo, MASKS, EDIT_REGIONS } from './render.js';
 import { EFFECTS, TARGET_LABELS, PASSIVES, TIMINGS, LIMITS, autoText, normalize, newCard, uniqueCardId, slug, newId, defaultLayout, toEngine, fromEngine, validate, parseAbility, randomName, randomAbility, toCSV, parseCSV, rowsToCards, cardsToRows, CSV_COLUMNS, SHEET_HELP } from './model.js';
 import * as store from './store.js';
-import { VERSION, SAVE_FORMAT } from './version.js';
+import { VERSION, SAVE_FORMAT, CODENAME, RELEASED, CHANGELOG } from './version.js';
 import { embed, extract } from './png-meta.js';
 
 const JSZIP = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm';
@@ -18,7 +18,7 @@ const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch { } };
 
 // Brand silhouettes from tools/build.mjs shapeSpecFor, used when the base set is loaded.
 const BASE_SHAPES = { 'Unassigned': 'circle', 'The Extremely Official Ninja Forum': 'hexagon', 'Snackforce 2000': 'triangle', 'B.O.R.E.D. Energy Drink': 'star5', 'PawSpace': 'pentagon', 'MegaMall After Dark': 'square', "Baby's First Apocalypse": 'star8' };
-const FOLDER_ICONS = ['📁', '⭐', '🔥', '⚔️', '🛡️', '🐒', '🍔', '🥤', '🐾', '🛒', '☢️', '🧪', '🎨', '💀', '✅', '🚧'];
+const FOLDER_ICONS = ['🃏', '🧪', '📁', '⭐', '🔥', '⚔️', '🛡️', '🐒', '🍔', '🥤', '🐾', '🛒', '☢️', '🧪', '🎨', '💀', '✅', '🚧'];
 const PRESETS = {
   Classic:   { paper: '#fff9eb', ink: '#171724', border: '#171724', sub: '#454554', accent: '', font: 'Arial' },
   Midnight:  { paper: '#1f1f33', ink: '#f4f4ff', border: '#0b0b14', sub: '#b8b8d8', accent: '', font: 'Arial' },
@@ -31,7 +31,7 @@ const PRESETS = {
 const TEXT_STICKERS = [['LOL!', '#ffda52'], ['NEW!', '#ff9ba7'], ['EPIC', '#ceacff'], ['RARE', '#89e4d7'], ['OOF', '#ffffff'], ['GG', '#aff57e'], ['+1', '#89d6ff'], ['NERF THIS', '#ff5a5a']];
 
 let P = null;                 // the project (set): { setName, brands, tags, folders, cards, assets, sheet }
-const ui = { view: 'library', cur: null, sel: null, sec: 'stats', folder: 'all', selecting: false, picked: new Set(), f: { q: '', type: 'all', tier: 'all', brand: 'all', tag: 'all', sort: 'num', trig: 'all' } };
+const ui = { lastPick: null, view: 'library', cur: null, sel: null, sec: 'stats', folder: 'all', selecting: false, picked: new Set(), f: { q: '', type: 'all', tier: 'all', brand: 'all', tag: 'all', sort: 'num', trig: 'all' } };
 // Ability categories: a Character's trigger (the banner words), or an Action's family.
 const TRIGGERS = {
   none:          { icon: '▫️', short: 'NONE',  label: 'No ability' },
@@ -101,7 +101,7 @@ function upgrade(o) {
   p.brands = (p.brands || []).filter(b => b && b.name).map(b => ({ name: String(b.name), shape: SHAPES[b.shape] ? b.shape : 'circle', color: /^#[0-9a-f]{6}$/i.test(b.color) ? b.color : '', ...(SAFE_ID.test(b.logo) ? { logo: b.logo } : {}) }));
   if (!p.brands.some(b => b.name === 'Unassigned')) p.brands.unshift({ name: 'Unassigned', shape: 'circle', color: '' });
   p.tags = [...new Set((p.tags || []).map(String))];
-  p.folders = (p.folders || []).filter(f => f && SAFE_ID.test(f.id)).map(f => ({ id: f.id, name: String(f.name || 'Folder').slice(0, 40), icon: FOLDER_ICONS.includes(f.icon) ? f.icon : '📁' }));
+  p.folders = (p.folders || []).filter(f => f && SAFE_ID.test(f.id)).map(f => ({ id: f.id, name: String(f.name || 'Folder').slice(0, 40), icon: FOLDER_ICONS.includes(f.icon) ? f.icon : '📁', ...(f.sandbox ? { sandbox: true } : {}) }));
   p.assets = Object.fromEntries(Object.entries(p.assets || {}).filter(([k, v]) => SAFE_ID.test(k) && /^data:image\/(png|jpeg|webp|gif);base64,/.test(v)));
   p.sheet = { url: String(p.sheet?.url || ''), auto: !!p.sheet?.auto, last: p.sheet?.last || '' };
   const folderIds = new Set(p.folders.map(f => f.id));
@@ -157,21 +157,33 @@ const cur = () => P.cards.find(c => c.uid === ui.cur);
 const selLayer = () => cur()?.layout.layers.find(l => l.id === ui.sel);
 function openEditor(uid) { ui.cur = uid; ui.sel = null; setView('editor'); }
 
-// ---------------------------------------------------------------- library + folders
+// ---------------------------------------------------------------- library + decks
+// "Decks" in the UI are `folders` in the data (a card can sit in several). A deck is
+// tournament-legal at exactly DECK_SIZE cards with distinct names (see src/rules.lua).
+const DECK_SIZE = 20;
 const inFolder = (c, f = ui.folder) => f === 'all' || (f === 'unfiled' ? !c.folders.length : c.folders.includes(f));
-const folderName = id => id === 'all' ? 'All cards' : id === 'unfiled' ? 'Unfiled' : P.folders.find(f => f.id === id)?.name || '';
+const folderName = id => id === 'all' ? 'All cards' : id === 'unfiled' ? 'Not in a deck' : P.folders.find(f => f.id === id)?.name || '';
+function deckStatus(id) {
+  if (P.folders.find(f => f.id === id)?.sandbox) { const n = P.cards.filter(c => c.folders.includes(id)).length; return { n, legal: false, sandbox: true, note: 'experiments', label: String(n) }; }
+  const cs = P.cards.filter(c => c.folders.includes(id)), n = cs.length;
+  const dupes = n - new Set(cs.map(c => c.name.trim().toLowerCase())).size;
+  const bad = cs.filter(c => validate(c, P).some(v => v[0] === 'error')).length;
+  const legal = n === DECK_SIZE && !dupes && !bad;
+  const note = legal ? '✓ tournament-legal' : n < DECK_SIZE ? `needs ${DECK_SIZE - n} more` : n > DECK_SIZE ? `${n - DECK_SIZE} too many` : dupes ? `${dupes} duplicate name${dupes === 1 ? '' : 's'}` : `${bad} card${bad === 1 ? '' : 's'} with errors`;
+  return { n, legal, note, label: `${n}/${DECK_SIZE}` };
+}
 function renderFolders() {
   if (ui.folder !== 'all' && ui.folder !== 'unfiled' && !P.folders.some(f => f.id === ui.folder)) ui.folder = 'all';
-  const row = (id, icon, name, n, edit) => `<div class="folder ${ui.folder === id ? 'on' : ''}" data-folder="${id}">
-    <button class="fbtn" data-open-folder="${id}" title="${esc(name)}"><span class="ficon">${icon}</span><span class="fname">${esc(name)}</span><span class="fcount">${n}</span></button>
-    ${edit ? `<button class="fmenu" data-edit-folder="${id}" title="Rename, change icon or delete" aria-label="Edit folder ${esc(name)}">⋯</button>` : ''}</div>`;
-  $('#folders').innerHTML = `<div class="folders-h">Folders</div>
-    ${row('all', '🗂️', 'All cards', P.cards.length)}${row('unfiled', '📥', 'Unfiled', P.cards.filter(c => !c.folders.length).length)}
+  const row = (id, icon, name, count, edit) => `<div class="folder ${ui.folder === id ? 'on' : ''}" data-folder="${id}">
+    <button class="fbtn" data-open-folder="${id}" title="${esc(name)}"><span class="ficon">${icon}</span><span class="fname">${esc(name)}</span><span class="fcount">${count}</span></button>
+    ${edit ? `<button class="fmenu" data-edit-folder="${id}" title="Rename, duplicate, back up or delete" aria-label="Deck options for ${esc(name)}">⋯</button>` : ''}</div>`;
+  $('#folders').innerHTML = `<div class="folders-h">Decks</div>
+    ${row('all', '🗂️', 'All cards', P.cards.length)}${row('unfiled', '📥', 'Not in a deck', P.cards.filter(c => !c.folders.length).length)}
     <div class="folder-sep"></div>
-    ${P.folders.map(f => row(f.id, f.icon, f.name, P.cards.filter(c => c.folders.includes(f.id)).length, true)).join('')}
-    <button class="btn small newfolder" id="newFolder">+ New folder</button>`;
+    ${P.folders.map(f => { const s = deckStatus(f.id); return row(f.id, f.icon, f.name, `${s.n}${s.legal ? ' ✓' : ''}`, true); }).join('')}
+    <button class="btn small newfolder" id="newFolder">+ New deck</button>`;
 }
-const welcomeArt = `<svg viewBox="0 0 220 150" aria-hidden="true"><g transform="rotate(-8 70 80)"><rect x="30" y="20" width="80" height="112" rx="8" fill="#171724"/><rect x="34" y="24" width="72" height="104" rx="6" fill="#fff9eb"/><rect x="38" y="28" width="64" height="22" rx="4" fill="#ff9ba7"/><rect x="38" y="56" width="64" height="34" fill="#89e4d7"/></g><g transform="rotate(7 150 80)"><rect x="110" y="20" width="80" height="112" rx="8" fill="#171724"/><rect x="114" y="24" width="72" height="104" rx="6" fill="#fff9eb"/><rect x="118" y="28" width="64" height="22" rx="4" fill="#ffda52"/><rect x="118" y="56" width="64" height="34" fill="#ceacff"/><text x="150" y="80" text-anchor="middle" font: font-family="Arial" font-weight="900" font-size="22" fill="#171724">?</text></g><polygon points="110,6 115,18 128,18 118,26 122,38 110,31 98,38 102,26 92,18 105,18" fill="#ffda52" stroke="#171724" stroke-width="3"/></svg>`;
+const welcomeArt = `<svg viewBox="0 0 220 150" aria-hidden="true"><g transform="rotate(-8 70 80)"><rect x="30" y="20" width="80" height="112" rx="8" fill="#171724"/><rect x="34" y="24" width="72" height="104" rx="6" fill="#fff9eb"/><rect x="38" y="28" width="64" height="22" rx="4" fill="#ff9ba7"/><rect x="38" y="56" width="64" height="34" fill="#89e4d7"/></g><g transform="rotate(7 150 80)"><rect x="110" y="20" width="80" height="112" rx="8" fill="#171724"/><rect x="114" y="24" width="72" height="104" rx="6" fill="#fff9eb"/><rect x="118" y="28" width="64" height="22" rx="4" fill="#ffda52"/><rect x="118" y="56" width="64" height="34" fill="#ceacff"/><text x="150" y="80" text-anchor="middle" font-family="Arial" font-weight="900" font-size="22" fill="#171724">?</text></g><polygon points="110,6 115,18 128,18 118,26 122,38 110,31 98,38 102,26 92,18 105,18" fill="#ffda52" stroke="#171724" stroke-width="3"/></svg>`;
 function renderLibrary() {
   renderFolders();
   const f = ui.f;
@@ -189,10 +201,10 @@ function renderLibrary() {
     (f.trig === 'all' || triggerOf(c) === f.trig));
   const by = { cost: (a, b) => a.c.cost - b.c.cost || a.i - b.i, name: (a, b) => a.c.name.localeCompare(b.c.name), brand: (a, b) => String(a.c.origin || '~').localeCompare(String(b.c.origin || '~')) || a.i - b.i, trigger: (a, b) => Object.keys(TRIGGERS).indexOf(triggerOf(a.c)) - Object.keys(TRIGGERS).indexOf(triggerOf(b.c)) || a.i - b.i }[f.sort];
   if (by) list.sort(by);
-  const inView = P.cards.filter(c => inFolder(c)).length;
-  const pool = P.cards.filter(c => inFolder(c)), avg = pool.length ? (pool.reduce((s, c) => s + c.cost, 0) / pool.length).toFixed(1) : 0;
-  $('#libCount').innerHTML = `${list.length === inView ? '' : list.length + ' of '}${inView} card${inView === 1 ? '' : 's'} · ${pool.filter(c => c.type === 'CHA').length} CHA · ${pool.filter(c => c.type === 'ACT').length} ACT · avg ${avg} SP · ${Object.entries(TRIGGERS).map(([k, t]) => [t, pool.filter(c => triggerOf(c) === k).length]).filter(([, n]) => n).map(([t, n]) => `<span title="${esc(t.label)}">${t.icon}${n}</span>`).join(' ')}`;
-  $('#folderActs').innerHTML = fo ? `<button class="btn" data-fact="export">⬇ Export deck</button><button class="btn" data-fact="version">🗄 Save version</button><button class="btn" data-fact="edit">⋯ Folder</button>` : '';
+  const pool = P.cards.filter(c => inFolder(c)), inView = pool.length, avg = inView ? (pool.reduce((s, c) => s + c.cost, 0) / inView).toFixed(1) : 0;
+  const meter = fo && !fo.sandbox ? (s => `<b class="deckmeter ${s.legal ? 'ok' : ''}" title="${esc(s.note)}">${s.n}/${DECK_SIZE}</b> ${esc(s.note)} · `)(deckStatus(fo.id)) : '';
+  $('#libCount').innerHTML = `${meter}${list.length === inView ? '' : list.length + ' of '}${inView} card${inView === 1 ? '' : 's'} · ${pool.filter(c => c.type === 'CHA').length} CHA · ${pool.filter(c => c.type === 'ACT').length} ACT · avg ${avg} SP · ${Object.entries(TRIGGERS).map(([k, t]) => [t, pool.filter(c => triggerOf(c) === k).length]).filter(([, n]) => n).map(([t, n]) => `<span title="${esc(t.label)}">${t.icon}${n}</span>`).join(' ')}`;
+  $('#folderActs').innerHTML = fo ? (fo.sandbox ? `<button class="btn primary" data-fact="roll">🎲 Roll 5 more</button><button class="btn" data-fact="clear">🧹 Clear sandbox</button>` : `<button class="btn" data-fact="export">⬇ Export deck</button>`) + `<button class="btn" data-fact="version">📸 Snapshot</button><button class="btn" data-fact="edit">⋯ Deck</button>` : '';
   $('#selectBtn').setAttribute('aria-pressed', ui.selecting);
   $('#selectBtn').textContent = ui.selecting ? '✓ Done selecting' : '☑ Select';
   renderSelbar(list.map(x => x.c));
@@ -200,25 +212,29 @@ function renderLibrary() {
   let empty = '';
   if (!P.cards.length) empty = `<div class="welcome">${welcomeArt}<h2>Your card library is empty</h2><p>Make your first card, roll a random one, or load the 24 base-game cards to see how they're built.</p>
     <div class="btnrow"><button class="btn primary" data-new="CHA">+ New Character</button><button class="btn primary alt" data-new="ACT">+ New Action</button><button class="btn" data-new="random">🎲 Surprise me</button></div>
-    <p class="small" style="margin-top:14px"><button class="link" data-act="loadBase">Load the base-game cards as examples</button> · <button class="link" data-act="openHelp">How does this work?</button></p></div>`;
+    <p style="margin-top:14px"><button class="btn" data-act="roll5">🧪 Start in the Sandbox (5 random cards)</button></p>
+    <p class="small" style="margin-top:6px"><button class="link" data-act="loadBase">Load the base-game cards as examples</button> · <button class="link" data-act="openHelp">How does this work?</button></p></div>`;
   else if (!list.length && filtered) empty = `<div class="empty">No cards match. <button class="link" data-act="clearFilters">Clear filters</button></div>`;
-  else if (!list.length) empty = `<div class="empty">This folder is empty.<br>Drag cards onto it, or use <b>☑ Select</b> → <b>Add to folder</b>. New cards made here land in it automatically.</div>`;
-  const drag = matchMedia('(pointer: fine)').matches;
+  else if (!list.length) empty = `<div class="empty">This deck is empty.<br>Go to <b>All cards</b>, then drag cards onto it (on a phone, hold a card first). New cards made here land in it automatically.</div>`;
   const showStacks = ui.folder === 'all' && !filtered && P.folders.length && P.cards.length;
-  $('#grid').innerHTML = (showStacks ? stacksMarkup() : '') + (empty || '') + (empty ? '' : list.map(({ c, i }) => {
+  const sb = sandbox();
+  const tip = fo?.sandbox ? `<div class="tipcard slim">🧪 <b>Sandbox:</b> experiments live here and never count toward a deck. Tweak the fun ones, drag keepers onto a deck, then <b>🧹 Clear sandbox</b>.</div>`
+    : ui.folder === 'all' && P.cards.length && !filtered && !lsGet('forge-tip-sandbox') ? `<div class="tipcard"><b>🧪 Tip: build by experimenting</b><p>Roll a handful of random cards into the Sandbox, tweak the ones that make you laugh, drag the keepers into a real deck, then clear the rest. Nothing in the Sandbox counts toward a deck.</p>
+      <div class="btnrow"><button class="btn primary" data-act="roll5">🎲 Roll 5 into the Sandbox</button>${sb ? `<button class="btn" data-open-folder="${sb.id}">Open Sandbox</button>` : ''}<button class="link small" data-act="hideTip">Hide this tip</button></div></div>` : '';
+  $('#grid').innerHTML = tip + (showStacks ? stacksMarkup() : '') + (empty || '') + (empty ? '' : list.map(({ c, i }) => {
     const errs = validate(c, P).filter(v => v[0] === 'error').length, picked = ui.picked.has(c.uid);
     const fIcons = c.folders.map(id => P.folders.find(x => x.id === id)?.icon).filter(Boolean).join('');
-    return `<button class="tile ${picked ? 'picked' : ''} ${isHolo(c) ? 'holo' : ''}" data-uid="${c.uid}" ${drag ? 'draggable="true"' : ''} title="${ui.selecting ? 'Select' : 'Edit'} ${esc(c.name)}" ${ui.selecting ? `aria-pressed="${picked}"` : ''}>
+    return `<button class="tile ${picked ? 'picked' : ''} ${isHolo(c) ? 'holo' : ''}" data-uid="${c.uid}" title="${ui.selecting ? 'Select' : 'Edit'} ${esc(c.name)} (hold to drag)" ${ui.selecting ? `aria-pressed="${picked}"` : ''}>
       <div class="card-wrap">${cardSVG(c, { project: P, index: i, uid: 't' + i, href })}${errs ? `<span class="badge" title="${errs} problem(s)">!</span>` : ''}${ui.selecting ? `<span class="pick">${picked ? '✓' : ''}</span>` : ''}</div>
-      <div class="cap"><b>${esc(c.name)}</b><span class="pill">${c.type === 'CHA' && c.edgelord ? 'EXE' : c.type}</span><span class="pill">${c.cost} SP</span><span class="pill trig" title="${esc(TRIGGERS[triggerOf(c)]?.label)}">${TRIGGERS[triggerOf(c)]?.icon} ${TRIGGERS[triggerOf(c)]?.short}</span>${c.type === 'CHA' ? `<span class="pill">${c.hp} HP</span>` : ''}${fIcons ? `<span title="In folders">${fIcons}</span>` : ''}</div></button>`;
+      <div class="cap"><b>${esc(c.name)}</b><span class="pill">${c.type === 'CHA' && c.edgelord ? 'EXE' : c.type}</span><span class="pill">${c.cost} SP</span><span class="pill trig" title="${esc(TRIGGERS[triggerOf(c)]?.label)}">${TRIGGERS[triggerOf(c)]?.icon} ${TRIGGERS[triggerOf(c)]?.short}</span>${c.type === 'CHA' ? `<span class="pill">${c.hp} HP</span>` : ''}${fIcons ? `<span title="In decks">${fIcons}</span>` : ''}</div></button>`;
   }).join(''));
 }
-// Procreate-style stacks: each folder is a little fanned pile of its first cards.
+// Procreate-style stacks: each deck is a little fanned pile of its first cards.
 function stacksMarkup() {
-  return `<div class="stacks-h">Folders &amp; decks</div>${P.folders.map(f => {
-    const cs = P.cards.filter(c => c.folders.includes(f.id)), top = cs.slice(0, 3).reverse();
+  return `<div class="stacks-h">Decks</div>${P.folders.map(f => {
+    const cs = P.cards.filter(c => c.folders.includes(f.id)), top = cs.slice(0, 3).reverse(), s = deckStatus(f.id);
     return `<div class="stack" data-folder="${f.id}"><button class="stack-pile" data-open-folder="${f.id}" title="Open ${esc(f.name)}">${top.length ? top.map((c, k) => `<span class="sc sc${top.length - 1 - k}">${cardSVG(c, { project: P, index: P.cards.indexOf(c), uid: 's' + f.id + k, href })}</span>`).join('') : '<span class="sc sc0 empty-pile">empty</span>'}</button>
-      <div class="cap"><b>${f.icon} ${esc(f.name)}</b><span class="pill">${cs.length}</span><button class="fmenu" data-edit-folder="${f.id}" title="Rename, duplicate, back up…" aria-label="Folder options">⋯</button></div></div>`;
+      <div class="cap"><b>${f.icon} ${esc(f.name)}</b><span class="pill deckpill ${s.legal ? 'ok' : ''}" title="${esc(s.note)}">${s.label}</span><button class="fmenu" data-edit-folder="${f.id}" title="Rename, duplicate, back up…" aria-label="Deck options">⋯</button></div></div>`;
   }).join('')}<div class="stacks-h">All cards</div>`;
 }
 function renderSelbar(visible) {
@@ -230,56 +246,57 @@ function renderSelbar(visible) {
   bar.dataset.visible = visible.map(c => c.uid).join(',');
   bar.innerHTML = `<b>${n} selected</b>
     <button class="btn small" data-sel="all">Select all</button><button class="btn small" data-sel="none" ${n ? '' : 'disabled'}>Clear</button>
+    <span class="selhint">Hold &amp; drag any selected card onto a deck</span>
     <span class="spacer"></span>
-    <button class="btn small primary" data-sel="addTo" ${n ? '' : 'disabled'}>📁 Add to folder</button>
-    ${inReal ? `<button class="btn small" data-sel="removeFrom" ${n ? '' : 'disabled'}>Remove from this folder</button>` : ''}
+    <button class="btn small primary" data-sel="addTo" ${n ? '' : 'disabled'}>🃏 Add to deck</button>
+    ${inReal ? `<button class="btn small" data-sel="removeFrom" ${n ? '' : 'disabled'}>Remove from this deck</button>` : ''}
     <button class="btn small" data-sel="dup" ${n ? '' : 'disabled'}>⧉ Duplicate</button>
     <button class="btn small" data-sel="export" ${n ? '' : 'disabled'}>⬇ Export ZIP</button>
     <button class="btn small danger-btn" data-sel="del" ${n ? '' : 'disabled'}>🗑 Delete</button>`;
 }
 async function pickFolder(title) {
-  const v = await ask({ title, body: `<div class="pick-list">${P.folders.map(f => `<button class="btn" value="${f.id}">${f.icon} ${esc(f.name)}</button>`).join('')}<button class="btn primary" value="__new">＋ New folder…</button></div>`, buttons: [{ label: 'Cancel', value: '' }] });
+  const v = await ask({ title, body: `<div class="pick-list">${P.folders.map(f => { const s = deckStatus(f.id); return `<button class="btn" value="${f.id}">${f.icon} ${esc(f.name)} <span class="muted">${s.label}</span></button>`; }).join('')}<button class="btn primary" value="__new">＋ New deck…</button></div>`, buttons: [{ label: 'Cancel', value: '' }] });
   if (v === '__new') return (await createFolder())?.id || null;
   return v || null;
 }
 function iconGrid(current) {
-  return `<div class="icon-grid" role="radiogroup" aria-label="Folder icon">${FOLDER_ICONS.map(ic => `<label><input type="radio" name="ficon" value="${ic}" ${ic === current ? 'checked' : ''}>${ic}</label>`).join('')}</div>`;
+  return `<div class="icon-grid" role="radiogroup" aria-label="Deck icon">${FOLDER_ICONS.map(ic => `<label><input type="radio" name="ficon" value="${ic}" ${ic === current ? 'checked' : ''}>${ic}</label>`).join('')}</div>`;
 }
 async function createFolder() {
-  const v = await ask({ title: '📁 New folder', body: `<label class="field" style="display:block"><span class="lbl">Name</span><input type="text" id="modalInput" maxlength="40" placeholder="e.g. Deck ideas, Needs art, Snack squad" autocomplete="off"></label><div class="field"><span class="lbl">Icon</span>${iconGrid('📁')}</div>`, buttons: [{ label: 'Cancel', value: '' }, { label: 'Create', value: 'ok', primary: true }] });
+  const v = await ask({ title: '🃏 New deck', body: `<label class="field" style="display:block"><span class="lbl">Name</span><input type="text" id="modalInput" maxlength="40" placeholder="e.g. Red starter, Snack squad, Needs art" autocomplete="off"></label><div class="field"><span class="lbl">Icon</span>${iconGrid('🃏')}</div><p class="muted small">A deck is tournament-legal at ${DECK_SIZE} cards with different names, but it can also just be a collection.</p>`, buttons: [{ label: 'Cancel', value: '' }, { label: 'Create', value: 'ok', primary: true }] });
   const name = $('#modalInput').value.trim();
   if (v !== 'ok' || !name) return null;
-  const f = { id: newId('f'), name, icon: $('#modalForm input[name=ficon]:checked')?.value || '📁' };
-  P.folders.push(f); save(); toast(`${f.icon} Folder “${name}” made`);
+  const f = { id: newId('f'), name, icon: $('#modalForm input[name=ficon]:checked')?.value || '🃏' };
+  P.folders.push(f); save(); toast(`${f.icon} Deck “${name}” made`);
   return f;
 }
 async function editFolder(id) {
   const f = P.folders.find(x => x.id === id); if (!f) return;
-  const n = P.cards.filter(c => c.folders.includes(id)).length;
-  const v = await ask({ title: `${f.icon} Edit folder`, body: `<label class="field" style="display:block"><span class="lbl">Name</span><input type="text" id="modalInput" maxlength="40" value="${esc(f.name)}" autocomplete="off"></label><div class="field"><span class="lbl">Icon</span>${iconGrid(f.icon)}</div><p class="muted small">Deleting a folder never deletes its ${n} card${n === 1 ? '' : 's'}.</p>`, buttons: [{ label: 'Delete folder', value: 'del', danger: true }, { label: '⧉ Duplicate', value: 'dup' }, { label: '🗄 Save version', value: 'version' }, { label: '⬇ Export', value: 'export' }, { label: 'Save', value: 'ok', primary: true }] });
+  const s = deckStatus(id);
+  const v = await ask({ title: `${f.icon} Edit deck`, body: `<label class="field" style="display:block"><span class="lbl">Name</span><input type="text" id="modalInput" maxlength="40" value="${esc(f.name)}" autocomplete="off"></label><div class="field"><span class="lbl">Icon</span>${iconGrid(f.icon)}</div><p class="muted small">${s.n}/${DECK_SIZE} · ${esc(s.note)}. Deleting a deck never deletes its cards.</p>`, buttons: [{ label: 'Delete deck', value: 'del', danger: true }, { label: '⧉ Duplicate', value: 'dup' }, { label: '📸 Snapshot', value: 'version' }, { label: '⬇ Export', value: 'export' }, { label: 'Save', value: 'ok', primary: true }] });
   if (v === 'dup') return duplicateFolder(f);
   if (v === 'version') return saveVersion(f.id);
   if (v === 'export') return exportZip(P.cards.filter(c => c.folders.includes(f.id)), f.name);
   if (v === 'ok') { f.name = $('#modalInput').value.trim() || f.name; f.icon = $('#modalForm input[name=ficon]:checked')?.value || f.icon; }
-  if (v === 'del') { P.folders = P.folders.filter(x => x !== f); for (const c of P.cards) c.folders = c.folders.filter(x => x !== id); if (ui.folder === id) ui.folder = 'all'; toast('Folder deleted (cards kept)'); }
+  if (v === 'del') { P.folders = P.folders.filter(x => x !== f); for (const c of P.cards) c.folders = c.folders.filter(x => x !== id); if (ui.folder === id) ui.folder = 'all'; toast('Deck deleted (cards kept)'); }
   if (v) { save(); renderLibrary(); }
+}
+function duplicateCards(cards, folders) {
+  for (const c of cards) { const d = clone(c); d.uid = newId('c'); d.name += ' (copy)'; d.id = uniqueCardId(d.name, P.cards); d.autoId = true; d.folders = [...folders]; P.cards.push(d); }
 }
 async function duplicateFolder(f) {
   const cs = P.cards.filter(c => c.folders.includes(f.id));
-  const v = await ask({ title: `⧉ Duplicate “${esc(f.name)}”`, body: `<p><b>Same cards</b>: a second folder pointing at the same ${cs.length} cards (edit once, both update). Handy for trying deck variants.</p><p><b>Copy the cards</b>: brand-new copies you can change without touching the originals.</p>`, buttons: [{ label: 'Cancel', value: '' }, { label: 'Same cards', value: 'ref' }, { label: 'Copy the cards', value: 'copy', primary: true }] });
+  const v = await ask({ title: `⧉ Duplicate “${esc(f.name)}”`, body: `<p><b>Same cards</b>: a second deck with the same ${cs.length} cards (edit a card once, both decks update). Handy for trying deck variants.</p><p><b>Copy the cards</b>: brand-new copies you can change without touching the originals.</p>`, buttons: [{ label: 'Cancel', value: '' }, { label: 'Same cards', value: 'ref' }, { label: 'Copy the cards', value: 'copy', primary: true }] });
   if (!v) return;
   const nf = { id: newId('f'), name: f.name + ' copy', icon: f.icon }; P.folders.push(nf);
-  for (const c of cs) {
-    if (v === 'ref') c.folders.push(nf.id);
-    else { const d = clone(c); d.uid = newId('c'); d.name += ' (copy)'; d.id = uniqueCardId(d.name, P.cards); d.autoId = true; d.folders = [nf.id]; P.cards.push(d); }
-  }
+  if (v === 'ref') for (const c of cs) c.folders.push(nf.id); else duplicateCards(cs, [nf.id]);
   save(); ui.folder = nf.id; renderLibrary(); toast(`⧉ Made “${nf.name}”`);
 }
 function addToFolder(uids, id) {
   let n = 0;
   for (const c of P.cards) if (uids.includes(c.uid)) { if (id === 'unfiled') { if (c.folders.length) n++; c.folders = []; } else if (!c.folders.includes(id)) { c.folders.push(id); n++; } }
   save(); renderLibrary();
-  toast(id === 'unfiled' ? `Moved ${n} to Unfiled` : `${P.folders.find(f => f.id === id)?.icon} Added ${n} card${n === 1 ? '' : 's'} to “${folderName(id)}”`);
+  toast(id === 'unfiled' ? `Took ${n} out of all decks` : `${P.folders.find(f => f.id === id)?.icon} Added ${n} card${n === 1 ? '' : 's'} to “${folderName(id)}”`);
 }
 function addCard(c, open = true) {
   c.uid = newId('c');
@@ -289,7 +306,14 @@ function addCard(c, open = true) {
   registerNames(c); save();
   if (open) openEditor(c.uid); else renderLibrary();
 }
-function surprise() {
+// ---- Sandbox: a scratch deck for random experiments. Keepers get dragged into real decks.
+const sandbox = () => P.folders.find(f => f.sandbox);
+function ensureSandbox() {
+  let s = sandbox();
+  if (!s) { s = { id: newId('f'), name: 'Sandbox', icon: '🧪', sandbox: true }; P.folders.unshift(s); }
+  return s;
+}
+function randomCard() {
   const type = Math.random() < 0.7 ? 'CHA' : 'ACT', c = newCard(type, P, randomName(type));
   c.cost = Math.floor(Math.random() * 5) + (type === 'ACT' ? 1 : 0);
   if (type === 'CHA') {
@@ -302,8 +326,29 @@ function surprise() {
   Object.assign(c, randomAbility(type));
   Object.assign(c.layout, Object.values(PRESETS)[Math.floor(Math.random() * Object.keys(PRESETS).length)]);
   c.id = uniqueCardId(c.name, P.cards);
-  normalize(c); addCard(c);
-  toast('🎲 Fresh card, hot off the forums!');
+  return normalize(c);
+}
+function surprise() {
+  const c = randomCard(), deck = P.folders.find(f => f.id === ui.folder);
+  if (deck) { addCard(c); return toast('🎲 Fresh card, hot off the forums!'); }
+  const sb = ensureSandbox(); c.uid = newId('c'); c.folders = [sb.id];
+  P.cards.push(c); registerNames(c); save(); openEditor(c.uid);
+  toast('🎲 Fresh card! It lives in the 🧪 Sandbox until you drag it into a deck.');
+}
+function rollSandbox(n = 5) {
+  const sb = ensureSandbox();
+  for (let i = 0; i < n; i++) { const c = randomCard(); c.uid = newId('c'); c.folders = [sb.id]; P.cards.push(c); registerNames(c); }
+  save(); ui.folder = sb.id; ui.picked.clear(); renderLibrary(); window.scrollTo({ top: 0 });
+  toast(`🎲 Rolled ${n} into the Sandbox. Tweak the fun ones, drag keepers into a deck.`);
+}
+async function clearSandbox() {
+  const sb = sandbox(); if (!sb) return;
+  const cs = P.cards.filter(c => c.folders.includes(sb.id)), only = cs.filter(c => c.folders.length === 1), kept = cs.length - only.length;
+  if (!cs.length) return toast('The Sandbox is already empty.');
+  if (!await confirmAsk('🧹 Clear the Sandbox?', `Delete the <b>${only.length}</b> card${only.length === 1 ? '' : 's'} that only live in the Sandbox${kept ? `, and take ${kept} card${kept === 1 ? '' : 's'} that are also in real decks out of it (they stay in those decks)` : ''}? Tip: take a 📸 Snapshot first if you're unsure.`, 'Clear')) return;
+  P.cards = P.cards.filter(c => !only.includes(c));
+  for (const c of P.cards) c.folders = c.folders.filter(x => x !== sb.id);
+  ui.picked.clear(); save(); renderLibrary(); toast('🧹 Sandbox cleared');
 }
 function newFromButton(kind) { if (kind === 'random') surprise(); else addCard(newCard(kind, P)); }
 
@@ -313,36 +358,168 @@ $('#folders').addEventListener('click', async e => {
   if (open) { ui.folder = open.dataset.openFolder; ui.picked.clear(); renderLibrary(); return; }
   if (e.target.closest('#newFolder')) { const f = await createFolder(); if (f) { if (ui.picked.size) addToFolder([...ui.picked], f.id); ui.folder = f.id; renderLibrary(); } }
 });
-// Desktop drag-and-drop: drag a card (or the whole selection) onto a folder.
-$('#grid').addEventListener('dragstart', e => {
-  const t = e.target.closest('.tile'); if (!t) return;
-  const uids = ui.picked.has(t.dataset.uid) ? [...ui.picked] : [t.dataset.uid];
-  e.dataTransfer.setData('application/x-forge-cards', uids.join(','));
-  e.dataTransfer.effectAllowed = 'copy';
-});
-for (const zone of ['#folders', '#grid']) {
-$(zone).addEventListener('dragover', e => {
-  const f = e.target.closest('[data-folder]');
-  if (!f || f.dataset.folder === 'all' || !e.dataTransfer.types.includes('application/x-forge-cards')) return;
-  e.preventDefault(); e.dataTransfer.dropEffect = 'copy';
-  $('.drop').forEach(x => x !== f && x.classList.remove('drop')); f.classList.add('drop');
-});
-$(zone).addEventListener('dragleave', e => { const f = e.target.closest('[data-folder]'); if (f && !f.contains(e.relatedTarget)) f.classList.remove('drop'); });
-$(zone).addEventListener('drop', e => {
-  const f = e.target.closest('[data-folder]'), data = e.dataTransfer.getData('application/x-forge-cards');
-  $('.drop').forEach(x => x.classList.remove('drop'));
-  if (!f || !data || f.dataset.folder === 'all') return;
-  e.preventDefault(); e.stopPropagation(); addToFolder(data.split(','), f.dataset.folder);
-});
+
+// ---------------------------------------------------------------- drag cards into decks (mouse + touch)
+// Mouse: press and drag. Touch: hold a moment, then drag (a quick swipe still scrolls the page).
+// Holding without moving on touch selects the card instead: that's how phones batch-select.
+let drag = null, justDragged = false;
+const LONG_PRESS = 380;
+function renderTray() {
+  const here = P.folders.find(f => f.id === ui.folder), n = drag.uids.length;
+  const item = (id, icon, name, extra = '', cls = '') => `<div class="dt-item ${cls}" data-drop="${id}"><span class="dt-ic">${icon}</span><span class="dt-nm">${esc(name)}</span>${extra}</div>`;
+  $('#dropTray').innerHTML = `<div class="dt-h">Drop <b>${n} card${n === 1 ? '' : 's'}</b> on a deck</div><div class="dt-grid">
+    ${P.folders.filter(f => f.id !== ui.folder).map(f => { const s = deckStatus(f.id); return item(f.id, f.icon, f.name, `<small class="${s.legal ? 'ok' : ''}">${s.label}</small>`); }).join('')}
+    ${item('new', '＋', 'New deck', '', 'new')}${item('dup', '⧉', here ? `Duplicate in ${here.name}` : 'Duplicate')}
+    ${here ? item('remove', '➖', `Remove from ${here.name}`, '', 'out') : item('unfiled', '📥', 'Take out of all decks', '', 'out')}</div>`;
 }
+function startDrag() {
+  if (!drag || drag.active) return;
+  clearTimeout(drag.timer);
+  drag.active = true;
+  drag.uids = ui.picked.has(drag.uid) ? [...ui.picked] : [drag.uid];
+  navigator.vibrate?.(12);
+  const g = document.createElement('div'); g.className = 'drag-ghost';
+  g.innerHTML = (drag.tile.querySelector('.card-wrap svg')?.outerHTML || '') + (drag.uids.length > 1 ? `<span class="dg-n">${drag.uids.length}</span>` : '');
+  document.body.append(g); drag.ghost = g;
+  drag.tile.classList.add('lifted');
+  renderTray(); $('#dropTray').hidden = false; document.body.classList.add('card-dragging');
+  moveDrag(drag.x, drag.y);
+}
+function dropTargetAt(x, y) {
+  const el = document.elementFromPoint(x, y)?.closest('[data-drop],[data-folder]');
+  if (!el) return null;
+  const id = el.dataset.drop ?? el.dataset.folder;
+  return id === 'all' || id === ui.folder ? null : { el, id };
+}
+function moveDrag(x, y) {
+  drag.x = x; drag.y = y;
+  if (Math.hypot(x - drag.x0, y - drag.y0) > 12) drag.moved = true;
+  drag.ghost.style.transform = `translate(${x - 42}px, ${y - 60}px) rotate(-6deg)`;
+  const t = drag.moved ? dropTargetAt(x, y) : null;
+  $$('.drop').forEach(e => e !== t?.el && e.classList.remove('drop'));
+  t?.el.classList.add('drop');
+}
+function stopDrag() {
+  if (!drag) return;
+  clearTimeout(drag.timer);
+  drag.ghost?.remove(); drag.tile?.classList.remove('lifted');
+  $('#dropTray').hidden = true; document.body.classList.remove('card-dragging');
+  $$('.drop').forEach(e => e.classList.remove('drop'));
+  drag = null;
+}
+function endDrag() {
+  const d = drag; if (!d?.active) return stopDrag();
+  const t = dropTargetAt(d.x, d.y), heldStill = d.touch && !d.moved;
+  stopDrag();
+  justDragged = true; setTimeout(() => justDragged = false, 400); // swallow the click some browsers send after a drag
+  // Only a real drag drops. Holding still and letting go selects, even if the tray slid up under the finger.
+  if (t && d.moved) return dropCards(d.uids, t.id);
+  if (heldStill) {
+    if (!ui.selecting) { ui.selecting = true; ui.picked.clear(); }
+    ui.picked.has(d.uid) ? ui.picked.delete(d.uid) : ui.picked.add(d.uid);
+    renderLibrary();
+    toast('Selected. Tap more cards, then hold and drag any of them onto a deck.');
+  }
+}
+async function dropCards(uids, target) {
+  const cards = P.cards.filter(c => uids.includes(c.uid)), here = P.folders.find(f => f.id === ui.folder);
+  if (!cards.length) return;
+  if (target === 'dup') { duplicateCards(cards, here ? [here.id] : []); save(); renderLibrary(); return toast(`⧉ Duplicated ${cards.length}`); }
+  if (target === 'unfiled') return addToFolder(uids, 'unfiled');
+  if (target === 'remove' && here) { for (const c of cards) c.folders = c.folders.filter(x => x !== here.id); ui.picked.clear(); save(); renderLibrary(); return toast(`Removed ${cards.length} from “${here.name}”`); }
+  if (target === 'new') { const nf = await createFolder(); if (!nf) return; target = nf.id; }
+  const f = P.folders.find(x => x.id === target); if (!f) return;
+  const fresh = cards.filter(c => !c.folders.includes(f.id));
+  if (!fresh.length) return toast(`Already in “${f.name}”.`);
+  const what = fresh.length === 1 ? `<b>${esc(fresh[0].name)}</b>` : `these <b>${fresh.length}</b> cards`;
+  const v = await ask({ title: `${f.icon} Into “${esc(f.name)}”`, body: `<p>What should happen to ${what}?</p><ul class="choice-help">
+    <li><b>＋ Add</b>: the same card, now in both places. Edit it once and it changes everywhere.</li>
+    ${here ? `<li><b>➡ Move</b>: add it here and take it out of “${esc(here.name)}”.</li>` : ''}
+    <li><b>⧉ Duplicate</b>: a separate copy you can change on its own.</li></ul>`,
+    buttons: [{ label: 'Cancel', value: '' }, { label: '⧉ Duplicate', value: 'dup' }, ...(here ? [{ label: '➡ Move', value: 'move' }] : []), { label: '＋ Add', value: 'add', primary: true }] });
+  if (!v) return;
+  if (v === 'dup') duplicateCards(fresh, [f.id]);
+  else for (const c of fresh) { c.folders.push(f.id); if (v === 'move') c.folders = c.folders.filter(x => x !== here.id); }
+  ui.picked.clear(); save(); renderLibrary();
+  const s = deckStatus(f.id);
+  toast(`${f.icon} ${v === 'dup' ? 'Duplicated' : v === 'move' ? 'Moved' : 'Added'} ${fresh.length} → “${f.name}” (${s.n}/${DECK_SIZE}${s.legal ? ' ✓' : ''})`);
+}
+let marq = null;
+function startMarquee(e) {
+  marq = { x0: e.clientX, y0: e.clientY, add: e.ctrlKey || e.metaKey || e.shiftKey, base: new Set(ui.picked), hit: new Set(), moved: false, el: null };
+}
+addEventListener('pointermove', e => {
+  if (!marq) return;
+  const x = Math.min(e.clientX, marq.x0), y = Math.min(e.clientY, marq.y0), w = Math.abs(e.clientX - marq.x0), h = Math.abs(e.clientY - marq.y0);
+  if (!marq.moved && w + h < 8) return;
+  if (!marq.el) { marq.el = document.createElement('div'); marq.el.className = 'marquee'; document.body.append(marq.el); document.body.classList.add('card-dragging'); }
+  marq.moved = true; Object.assign(marq.el.style, { left: x + 'px', top: y + 'px', width: w + 'px', height: h + 'px' });
+  marq.hit.clear();
+  for (const t of $$('#grid .tile')) {
+    const r = t.getBoundingClientRect(), on = r.left < x + w && r.right > x && r.top < y + h && r.bottom > y;
+    if (on) marq.hit.add(t.dataset.uid);
+    t.classList.toggle('picked', on || (marq.add && marq.base.has(t.dataset.uid)));
+  }
+});
+addEventListener('pointerup', () => {
+  if (!marq) return;
+  const m = marq; marq = null; m.el?.remove(); document.body.classList.remove('card-dragging');
+  if (!m.moved) return;
+  ui.picked = m.add ? new Set([...m.base, ...m.hit]) : new Set(m.hit);
+  ui.selecting = ui.picked.size > 0 || ui.selecting;
+  justDragged = true; setTimeout(() => justDragged = false, 400);
+  renderLibrary();
+  if (m.hit.size) toast(`Selected ${ui.picked.size}. Drag any of them onto a deck.`);
+});
+function gather(t) {
+  if (!t || drag.uids.includes(t.dataset.uid)) return;
+  drag.uids.push(t.dataset.uid); t.classList.add('lifted', 'gathered'); navigator.vibrate?.(8);
+  drag.ghost.querySelector('.dg-n')?.remove();
+  drag.ghost.insertAdjacentHTML('beforeend', `<span class="dg-n">${drag.uids.length}</span>`);
+  renderTray();
+}
+$('#grid').addEventListener('pointerdown', e => {
+  const t = e.target.closest('.tile');
+  if (drag) { if (t && drag.active && drag.touch && e.pointerType !== 'mouse' && e.pointerId !== drag.id) gather(t); return; }
+  if (!t && e.pointerType === 'mouse' && e.button === 0 && !e.target.closest('button,a,input,select,.stack,.tipcard')) return startMarquee(e);
+  if (!t || e.button > 0) return;
+  drag = { uid: t.dataset.uid, tile: t, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, id: e.pointerId, touch: e.pointerType !== 'mouse', active: false, moved: false };
+  if (drag.touch) drag.timer = setTimeout(startDrag, LONG_PRESS);
+});
+addEventListener('pointermove', e => {
+  if (!drag || drag.touch || e.pointerId !== drag.id) return;
+  if (!drag.active) { if (Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 6) return; drag.x = e.clientX; drag.y = e.clientY; startDrag(); }
+  moveDrag(e.clientX, e.clientY);
+});
+addEventListener('pointerup', e => { if (drag && !drag.touch && e.pointerId === drag.id) endDrag(); });
+addEventListener('pointercancel', e => { if (drag && !drag.touch && e.pointerId === drag.id) stopDrag(); });
+// Touch is tracked with touch events so the page can be held still (no scrolling) mid-drag.
+addEventListener('touchstart', e => {
+  if (!drag?.touch) return;
+  if (drag.touchId == null) drag.touchId = e.changedTouches[0].identifier;
+  else if (!drag.active && e.touches.length > 1) stopDrag(); // two fingers before the hold = a pinch, not a drag
+}, { passive: true });
+addEventListener('touchmove', e => {
+  if (!drag?.touch) return;
+  const p = [...e.touches].find(x => x.identifier === drag.touchId) || e.touches[0]; if (!p) return;
+  if (!drag.active) { if (Math.hypot(p.clientX - drag.x0, p.clientY - drag.y0) > 10) stopDrag(); return; }
+  e.preventDefault(); moveDrag(p.clientX, p.clientY);
+}, { passive: false });
+addEventListener('touchend', e => {
+  if (!drag?.touch) return;
+  if (drag.touchId != null && ![...e.changedTouches].some(x => x.identifier === drag.touchId)) return; // a gathering finger lifted
+  drag.active ? endDrag() : stopDrag();
+});
+addEventListener('touchcancel', () => { if (drag?.touch) stopDrag(); });
+$('#grid').addEventListener('contextmenu', e => { if (e.target.closest('.tile')) e.preventDefault(); });
 $('#selbar').addEventListener('click', async e => {
   const b = e.target.closest('[data-sel]'); if (!b) return;
   const a = b.dataset.sel, uids = [...ui.picked], picked = P.cards.filter(c => ui.picked.has(c.uid));
   if (a === 'all') { for (const id of $('#selbar').dataset.visible.split(',').filter(Boolean)) ui.picked.add(id); }
   if (a === 'none') ui.picked.clear();
-  if (a === 'addTo') { const id = await pickFolder(`Add ${uids.length} card${uids.length === 1 ? '' : 's'} to…`); if (id) return addToFolder(uids, id); }
+  if (a === 'addTo') { const id = await pickFolder(`Add ${uids.length} card${uids.length === 1 ? '' : 's'} to…`); if (id) return dropCards(uids, id); }
   if (a === 'removeFrom') { for (const c of picked) c.folders = c.folders.filter(x => x !== ui.folder); ui.picked.clear(); save(); toast(`Removed ${picked.length} from “${folderName(ui.folder)}”`); }
-  if (a === 'dup') { for (const c of picked) { const d = clone(c); d.uid = newId('c'); d.name += ' (copy)'; d.id = uniqueCardId(d.name, P.cards); d.autoId = true; P.cards.push(d); } save(); toast(`Duplicated ${picked.length}`); }
+  if (a === 'dup') { duplicateCards(picked, P.folders.some(f => f.id === ui.folder) ? [ui.folder] : []); save(); toast(`Duplicated ${picked.length}`); }
   if (a === 'export') return exportZip(picked, `${folderName(ui.folder)}-selection`);
   if (a === 'del' && await confirmAsk('Delete cards?', `Delete <b>${picked.length}</b> card${picked.length === 1 ? '' : 's'} for good? (A downloaded save file can bring them back.)`, 'Delete')) {
     P.cards = P.cards.filter(c => !ui.picked.has(c.uid)); ui.picked.clear(); save(); toast('Deleted');
@@ -355,10 +532,14 @@ $('#folderActs').addEventListener('click', e => {
   if (a === 'export') exportZip(P.cards.filter(c => c.folders.includes(f.id)), f.name);
   if (a === 'version') saveVersion(f.id);
   if (a === 'edit') editFolder(f.id);
+  if (a === 'roll') rollSandbox(5);
+  if (a === 'clear') clearSandbox();
 });
 // Zoom the card grid (slider, or Ctrl + scroll wheel over the cards).
 function setZoom(px) { px = clamp(Math.round(px), 90, 320); document.documentElement.style.setProperty('--tile', px + 'px'); $('#zoom').value = px; lsSet('forge-zoom', px); }
 $('#zoom').addEventListener('input', e => setZoom(+e.target.value));
+$('#zoomOut').addEventListener('click', () => setZoom(+$('#zoom').value * 0.8));
+$('#zoomIn').addEventListener('click', () => setZoom(+$('#zoom').value * 1.25));
 $('#grid').addEventListener('wheel', e => { if (!e.ctrlKey) return; e.preventDefault(); setZoom(+$('#zoom').value * Math.exp(-e.deltaY * 0.002)); }, { passive: false });
 setZoom(+(lsGet('forge-zoom') || (matchMedia('(max-width: 760px)').matches ? 104 : 150)));
 
@@ -705,7 +886,7 @@ function secStats(c) {
     : `<div class="field"><span class="lbl">Action family</span><div class="seg wide">${segBtn('family', 'direct', '▲ Direct', c.family)}${segBtn('family', 'control', '⬢ Control', c.family)}</div></div>`}
   <div class="two"><div class="field"><span class="lbl">Cost (SP)</span>${stepper('cost', c.cost, 'Cost')}</div>
   ${c.type === 'CHA' ? `<div class="field"><span class="lbl">HP</span>${stepper('hp', c.hp, 'HP')}</div>` : ''}</div>
-  <div class="field"><span class="lbl">Folders</span><div class="chips">${P.folders.map(f => `<button type="button" class="chip" data-folder-toggle="${f.id}" aria-pressed="${c.folders.includes(f.id)}">${f.icon} ${esc(f.name)}</button>`).join('')}<button type="button" class="chip" data-act="newFolder">＋ New folder</button></div></div>
+  <div class="field"><span class="lbl">Decks</span><div class="chips">${P.folders.map(f => `<button type="button" class="chip" data-folder-toggle="${f.id}" aria-pressed="${c.folders.includes(f.id)}">${f.icon} ${esc(f.name)}</button>`).join('')}<button type="button" class="chip" data-act="newFolder">＋ New deck</button></div></div>
   <div class="field"><label for="fFlavor">Flavor text</label><textarea id="fFlavor" data-f="flavor" rows="2" maxlength="140" placeholder="A funny one-liner (optional)">${esc(c.flavor || '')}</textarea></div>
   <div class="field"><label for="fArtist">Art credit</label><input type="text" id="fArtist" data-f="artist" value="${esc(c.artist || '')}" maxlength="40" placeholder="Who made the art?"></div>
   <div class="field"><label for="fNote">Designer notes</label><textarea id="fNote" data-f="note" rows="2" placeholder="For collaborators — exported with the data, never printed">${esc(c.note || '')}</textarea></div>
@@ -929,7 +1110,7 @@ function renderBrands() {
     <div class="field"><label for="sName">Set name <span class="muted">(printed on every card)</span></label><input type="text" id="sName" data-set="setName" value="${esc(P.setName)}" maxlength="32"></div>
     <div class="two"><div class="field"><label for="sCode">Set code</label><input type="text" id="sCode" data-set="setCode" value="${esc(P.setCode || '')}" maxlength="12"></div>
     <div class="field"><label for="sCred">Made by</label><input type="text" id="sCred" data-set="credits" value="${esc(P.credits || '')}" maxlength="60"></div></div>
-    <p class="muted small">${P.cards.length} cards · ${P.cards.filter(c => c.type === 'CHA').length} CHA · ${P.cards.filter(c => c.type === 'ACT').length} ACT · ${P.brands.length} brands · ${P.tags.length} allegiances · ${P.folders.length} folders</p>`;
+    <p class="muted small">${P.cards.length} cards · ${P.cards.filter(c => c.type === 'CHA').length} CHA · ${P.cards.filter(c => c.type === 'ACT').length} ACT · ${P.brands.length} brands · ${P.tags.length} allegiances · ${P.folders.length} decks</p>`;
   $('#brandList').innerHTML = P.brands.map((b, i) => {
     const n = P.cards.filter(c => c.origin === b.name).length;
     return `<div class="brow"><span class="ico">${shapeIcon(b.shape, b.color || 'currentColor', 28)}</span>
@@ -1216,7 +1397,7 @@ async function importProject(o, name) {
   warnIfNewer(o, name);
   const inc = upgrade(clone(o));
   if (!P.cards.length) { resetTo(inc); setView('library'); return toast(`📂 Opened “${inc.setName}” (${inc.cards.length} cards)`); }
-  const v = await ask({ title: '📂 Open save', body: `<p><b>${esc(name)}</b> — “${esc(inc.setName)}”, ${inc.cards.length} cards.</p><p><b>Merge</b> adds its cards to yours (same card ID = theirs wins, folders with the same name combine). <b>Replace</b> swaps your whole set for theirs.</p>`, buttons: [{ label: 'Cancel', value: '' }, { label: 'Replace my set', value: 'replace' }, { label: 'Merge', value: 'merge', primary: true }] });
+  const v = await ask({ title: '📂 Open save', body: `<p><b>${esc(name)}</b> — “${esc(inc.setName)}”, ${inc.cards.length} cards.</p><p><b>Merge</b> adds its cards to yours (same card ID = theirs wins, decks with the same name combine). <b>Replace</b> swaps your whole set for theirs.</p>`, buttons: [{ label: 'Cancel', value: '' }, { label: 'Replace my set', value: 'replace' }, { label: 'Merge', value: 'merge', primary: true }] });
   if (!v) return;
   if (v === 'replace') resetTo(inc);
   else { const { add, upd } = mergeProject(inc); save(); toast(`Merged: ${add} new, ${upd} updated`); }
@@ -1291,7 +1472,7 @@ async function loadBase() {
 }
 $('#loadBase').addEventListener('click', loadBase);
 $('#emptySet').addEventListener('click', async () => {
-  if (!await confirmAsk('Wipe everything?', 'Delete every card, folder and brand in this browser and start blank? Download a save file first if you want to keep your work.', 'Wipe it')) return;
+  if (!await confirmAsk('Wipe everything?', 'Delete every card, deck and brand in this browser and start blank? Download a save file first if you want to keep your work.', 'Wipe it')) return;
   resetTo(emptyProject()); setView('library'); toast('Fresh start!');
 });
 
@@ -1309,8 +1490,9 @@ async function saveVersion(scope = 'set', auto = false) {
   const cards = scope === 'set' ? P.cards : P.cards.filter(c => c.folders.includes(scope));
   if (!cards.length) return auto || toast('Nothing to back up yet.', true);
   const list = await versionList(), n = list.filter(s => s.scope === scope && !s.auto).length + 1;
-  let label = auto ? 'Auto backup' : `v${n}`;
-  if (!auto) { const named = await promptText(`🗄 Save a version of ${f ? '“' + esc(f.name) + '”' : 'the whole set'}`, 'Name this version (optional)', label); if (named === null) return; label = named || label; }
+  const when = new Date().toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  let label = auto ? 'Auto backup' : `Snapshot ${n} · ${when}`;
+  if (!auto) { const named = await promptText(`📸 Snapshot ${f ? '“' + esc(f.name) + '”' : 'the whole set'}`, 'Name it so you’ll recognise it later (e.g. “before nerfs”, “playtest 2”)', label); if (named === null) return; label = named || label; }
   const meta = { id: newId('v'), scope, scopeName: f ? f.name : P.setName, icon: f ? f.icon : '📦', label: label.slice(0, 40), date: Date.now(), count: cards.length, auto };
   try {
     await store.set('snap:' + meta.id, partialProject(cards));
@@ -1318,44 +1500,44 @@ async function saveVersion(scope = 'set', auto = false) {
     const autos = list.filter(s => s.auto);
     for (const old of autos.slice(8)) { list.splice(list.indexOf(old), 1); store.del('snap:' + old.id); }
     await store.set('snaps', list);
-    if (!auto) toast(`🗄 Saved ${meta.label} of “${meta.scopeName}”`);
+    if (!auto) toast(`📸 Snapshot saved: “${meta.label}” (${meta.count} cards)`);
     if (ui.view === 'share') renderVersions();
-  } catch (e) { console.error(e); if (!auto) toast('Could not store the version (browser storage full?). Download a save file instead.', true); }
+  } catch (e) { console.error(e); if (!auto) toast('Could not store the snapshot (browser storage full?). Download a save file instead.', true); }
 }
 const vDate = t => new Date(t).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
 const vFileName = s => `${slug(s.scopeName)}-${slug(s.label)}-${new Date(s.date).toISOString().slice(0, 10)}.lftset.json`;
 async function renderVersions() {
   const list = await versionList(), el = $('#versionList');
   el.innerHTML = list.length ? list.map(s => `<div class="vrow"><span class="vicon">${s.icon}</span><span class="vtxt"><b>${esc(s.scopeName)}</b> · ${esc(s.label)}<small>${vDate(s.date)} · ${s.count} card${s.count === 1 ? '' : 's'}${s.auto ? ' · automatic' : ''}</small></span>
-    <button class="btn small" data-v="restore" data-id="${s.id}">↺ Restore</button><button class="btn small" data-v="dl" data-id="${s.id}" title="Download">⬇</button><button class="btn small danger-btn" data-v="del" data-id="${s.id}" title="Delete">🗑</button></div>`).join('')
-    : '<p class="muted small">No versions yet. Save one before big changes. The Forge also keeps a few automatic backups.</p>';
+    <button class="btn small" data-v="restore" data-id="${s.id}">↺ Roll back to this</button><button class="btn small" data-v="dl" data-id="${s.id}" title="Download">⬇</button><button class="btn small danger-btn" data-v="del" data-id="${s.id}" title="Delete">🗑</button></div>`).join('')
+    : '<p class="muted small">No snapshots yet. Take one before big changes. The Forge also keeps a few automatic backups.</p>';
 }
 $('#pVersions').addEventListener('click', async e => {
   const b = e.target.closest('button'); if (!b) return;
   if (b.id === 'saveSetVersion') return saveVersion('set');
   if (b.id === 'archiveVersions') {
-    const list = await versionList(); if (!list.length) return toast('No versions to archive yet.', true);
+    const list = await versionList(); if (!list.length) return toast('No snapshots to archive yet.', true);
     let JSZip; try { JSZip = (await lib(JSZIP, 'Archive')).default; } catch (err) { return toast(err.message, true); }
     const zip = new JSZip();
     for (const s of list) { const d = await store.get('snap:' + s.id); if (d) zip.file(`${s.auto ? 'auto/' : ''}${vFileName(s)}`, JSON.stringify(d)); }
     zip.file('current.lftset.json', JSON.stringify(partialProject(P.cards)));
     download(await zip.generateAsync({ type: 'blob' }), `${slug(P.setName)}-archive-${new Date().toISOString().slice(0, 10)}.zip`);
-    return toast('🗄 Archive downloaded — every version in one ZIP');
+    return toast('🗄 Archive downloaded — every snapshot in one ZIP');
   }
   const id = b.dataset.id, list = await versionList(), s = list.find(x => x.id === id); if (!s) return;
   if (b.dataset.v === 'dl') { const d = await store.get('snap:' + id); if (d) download(new Blob([JSON.stringify(d)], { type: 'application/json' }), vFileName(s)); }
   if (b.dataset.v === 'restore') { const d = await store.get('snap:' + id); if (d) { await saveVersion('set', true); await importProject(d, `${s.scopeName} · ${s.label}`); } }
-  if (b.dataset.v === 'del' && await confirmAsk('Delete version?', `Delete ${esc(s.label)} of “${esc(s.scopeName)}”?`, 'Delete')) { list.splice(list.indexOf(s), 1); await store.set('snaps', list); await store.del('snap:' + id); renderVersions(); }
+  if (b.dataset.v === 'del' && await confirmAsk('Delete snapshot?', `Delete ${esc(s.label)} of “${esc(s.scopeName)}”?`, 'Delete')) { list.splice(list.indexOf(s), 1); await store.set('snaps', list); await store.del('snap:' + id); renderVersions(); }
 });
 
 // ---------------------------------------------------------------- help overlay
 const HELP = {
   library: { title: 'Your card library', flow: 0, steps: [
-    ['.newrow', 'Make a card', 'Start a Character or an Action, or 🎲 roll a random one for ideas.'],
-    ['#folders', 'Folders', 'Sort cards however you like: decks, “needs art”, a brand. On PC, drag cards onto a folder. On a phone, use ☑ Select.'],
-    ['#grid', 'Tap a card to edit it', 'A red ! means something needs fixing.'],
-    ['#zoom', 'Zoom', 'Make cards bigger or smaller (Ctrl + scroll works on PC). Folders show up as stacks you can open.'],
-    ['#selectBtn', 'Select several', 'Move many cards into a folder, duplicate, export or delete them at once.'],
+    ['.newrow', 'Make a card', 'Start a Character or an Action. Stuck? 🎲 roll random ones into the 🧪 Sandbox, keep the fun ones, clear the rest.'],
+    ['#folders', 'Decks', 'Group cards into decks. 20 cards with different names is tournament-legal (you’ll see a ✓). A card can be in several decks.'],
+    ['#grid', 'Tap to edit · drag into decks', 'Tap a card to edit it. Drag it onto a deck (on touch, hold it first). Pick up several: hold to select then tap more, tap other cards with a second finger while dragging, or Ctrl/Shift-click and drag a box on PC.'],
+    ['#zoom', 'Zoom', 'Make cards bigger or smaller (Ctrl + scroll works on PC). Decks show up as stacks you can open.'],
+    ['#selectBtn', 'Select several', 'Add many cards to a deck, duplicate, export or delete them at once.'],
     ['.filters', 'Find stuff', 'Search, or filter by type, tier, brand or allegiance.'],
   ] },
   editor: { title: 'Designing a card', flow: 1, steps: [
@@ -1375,7 +1557,7 @@ const HELP = {
     ['#pSave', 'Your save', 'Autosaves in this browser. Download a save file to switch devices or hand work to a teammate.'],
     ['#pSheet', 'Spreadsheets', 'Type cards in Excel or Google Sheets and drop the file here, or link a Google Sheet for live updates.'],
     ['#pZip', 'Export everything', 'One ZIP with card images, a Tabletop Simulator deck and the game data.'],
-    ['#pVersions', 'Versions & backups', 'Save named versions of your set or a deck, restore them, or download every version as one archive.'],
+    ['#pVersions', 'Snapshots & backups', 'Take a 📸 snapshot of your set or a deck before big changes, roll back any time, or download every snapshot as one archive.'],
   ] },
 };
 const flowArt = active => `<svg class="help-flow" viewBox="0 0 330 74" aria-hidden="true">${['MAKE', 'STYLE', 'SHARE'].map((t, i) => `
@@ -1393,7 +1575,7 @@ function openHelp(step = 0) {
   if (compactHelp()) {
     helpStep = clamp(step, 0, h.steps.length - 1);
     const [sel, t, d] = h.steps[helpStep], last = helpStep === h.steps.length - 1;
-    $('#help').classList.add('compact');
+    $('#help').classList.add('compact'); $('#help').classList.remove('dock-left');
     $('#helpCard').innerHTML = `<div class="panel-h">❓ ${h.title}<span class="muted-h">${helpStep + 1} / ${h.steps.length}</span></div>
       <div class="body"><div class="hstep"><span class="n">${helpStep + 1}</span><span><b>${t}</b><small>${d}</small></span></div></div>
       <div class="help-foot"><button class="btn small" data-help-step="-1" ${helpStep ? '' : 'disabled'}>‹ Back</button><button class="link small" id="helpClose">close</button>
@@ -1404,6 +1586,10 @@ function openHelp(step = 0) {
     return layoutHelp();
   }
   $('#help').classList.remove('compact');
+  // Dock the card on whichever side hides fewer of the things it points at.
+  const hiddenBy = side => { const cw = Math.min(370, innerWidth - 32), x0 = side === 'left' ? 16 : innerWidth - 16 - cw;
+    return h.steps.filter(([sel]) => { const r = $(sel)?.getBoundingClientRect(); return r?.width && r.left >= x0 - 4 && r.right <= x0 + cw + 4; }).length; };
+  $('#help').classList.toggle('dock-left', hiddenBy('left') < hiddenBy('right'));
   $('#helpCard').innerHTML = `<div class="panel-h">❓ ${h.title}</div><div class="body">${flowArt(h.flow)}
     <p>Numbers match the glowing boxes. Tap one to jump to it.</p>
     <ol>${h.steps.map(([sel, t, d], i) => `<li><button data-help-go="${i}"><span class="n">${i + 1}</span><span><b>${t}</b><small>${d}</small><span class="off" data-help-off="${i}" hidden>↕ scroll to see it</span></span></button></li>`).join('')}</ol></div>
@@ -1416,14 +1602,22 @@ function layoutHelp() {
   if ($('#help').hidden) return;
   const steps = HELP[ui.view].steps, vw = innerWidth, vh = innerHeight, only = $('#help').classList.contains('compact') ? helpStep : -1;
   const floor = only >= 0 ? $('#helpCard').getBoundingClientRect().top - 6 : vh - 4;
+  const card = $('#helpCard').getBoundingClientRect(), placed = [];
+  const clash = (x, y) => placed.some(p => Math.abs(p.x - x) < 38 && Math.abs(p.y - y) < 38) || (x + 18 > card.left && x - 18 < card.right && y + 18 > card.top && y - 18 < card.bottom);
+  let nums = '';
   $('#helpMarks').innerHTML = steps.map(([sel], i) => {
     if (only >= 0 && i !== only) return '';
     const el = $(sel), r = el?.getBoundingClientRect(), off = !r || !r.width || r.bottom < 8 || r.top > vh - 8;
     const flag = $(`[data-help-off="${i}"]`); if (flag) flag.hidden = !off || !r?.width;
     if (off) return '';
     const t = Math.max(r.top, 18), l = Math.max(r.left, 18), b = Math.max(t + 24, Math.min(r.bottom, floor)), rr = Math.min(r.right, vw - 4);
-    return `<div class="hmark" data-hm="${i}" style="top:${t}px;left:${l}px;width:${Math.max(24, rr - l)}px;height:${Math.max(24, b - t)}px"><span class="hnum">${i + 1}</span></div>`;
-  }).join('');
+    const cands = [[l, t], [rr, t], [l, b], [rr, b]];
+    for (let k = 1; k < 10; k++) cands.push([l + k * 42, t], [l, t + k * 42]);
+    const pos = cands.find(([x, y]) => x >= 16 && x <= vw - 16 && y >= 16 && y <= vh - 16 && !clash(x, y)) || cands[0];
+    placed.push({ x: pos[0], y: pos[1] });
+    nums += `<span class="hnum" style="left:${pos[0] - 16}px;top:${pos[1] - 16}px">${i + 1}</span>`;
+    return `<div class="hmark" data-hm="${i}" style="top:${t}px;left:${l}px;width:${Math.max(24, rr - l)}px;height:${Math.max(24, b - t)}px"></div>`;
+  }).join('') + nums;
 }
 let helpRaf = 0;
 const helpRelayout = () => { if ($('#help').hidden || helpRaf) return; helpRaf = requestAnimationFrame(() => { helpRaf = 0; layoutHelp(); }); };
@@ -1449,15 +1643,25 @@ $('#q').addEventListener('input', e => { ui.f.q = e.target.value; renderLibrary(
 $('#fType').addEventListener('click', e => { const b = e.target.closest('button'); if (b) { ui.f.type = b.dataset.v; renderLibrary(); } });
 for (const [id, k] of [['#fTier', 'tier'], ['#fBrand', 'brand'], ['#fTag', 'tag'], ['#fSort', 'sort'], ['#fTrig', 'trig']]) $(id).addEventListener('change', e => { ui.f[k] = e.target.value; renderLibrary(); });
 $('#grid').addEventListener('click', e => {
+  if (justDragged) return;
   const nb = e.target.closest('[data-new]'); if (nb) return newFromButton(nb.dataset.new);
   const act = e.target.closest('[data-act]')?.dataset.act;
   if (act === 'clearFilters') { Object.assign(ui.f, { q: '', type: 'all', tier: 'all', brand: 'all', tag: 'all', trig: 'all' }); $('#q').value = ''; $('#fTrig').value = 'all'; $('#fTier').value = 'all'; return renderLibrary(); }
   if (act === 'loadBase') return loadBase();
   if (act === 'openHelp') return openHelp();
+  if (act === 'roll5') return rollSandbox(5);
+  if (act === 'hideTip') { lsSet('forge-tip-sandbox', '1'); return renderLibrary(); }
   const ef = e.target.closest('[data-edit-folder]'); if (ef) return editFolder(ef.dataset.editFolder);
   const of = e.target.closest('[data-open-folder]'); if (of) { ui.folder = of.dataset.openFolder; ui.picked.clear(); renderLibrary(); window.scrollTo({ top: 0 }); return; }
   const t = e.target.closest('.tile'); if (!t) return;
-  if (ui.selecting) { ui.picked.has(t.dataset.uid) ? ui.picked.delete(t.dataset.uid) : ui.picked.add(t.dataset.uid); renderLibrary(); }
+  if (e.ctrlKey || e.metaKey || e.shiftKey) {
+    const uids = $$('#grid .tile').map(x => x.dataset.uid), a = uids.indexOf(ui.lastPick), b = uids.indexOf(t.dataset.uid);
+    if (!ui.selecting) { ui.selecting = true; ui.picked.clear(); }
+    if (e.shiftKey && a >= 0) for (let i = Math.min(a, b); i <= Math.max(a, b); i++) ui.picked.add(uids[i]);
+    else ui.picked.has(t.dataset.uid) ? ui.picked.delete(t.dataset.uid) : ui.picked.add(t.dataset.uid);
+    ui.lastPick = t.dataset.uid; return renderLibrary();
+  }
+  if (ui.selecting) { ui.picked.has(t.dataset.uid) ? ui.picked.delete(t.dataset.uid) : ui.picked.add(t.dataset.uid); ui.lastPick = t.dataset.uid; renderLibrary(); }
   else openEditor(t.dataset.uid);
 });
 $('#filterToggle').addEventListener('click', e => { const open = $('#filters').classList.toggle('open'); e.currentTarget.setAttribute('aria-expanded', open); if (open) $('#q').focus(); });
@@ -1519,8 +1723,13 @@ async function renderFooter() {
     const sha = String(b.sha || '').slice(0, 7), url = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+$/.test(b.repo) ? `${b.repo}/commit/${b.sha}` : '';
     build = `build ${url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(sha)}</a>` : esc(sha)} · ${esc(String(b.date || '').slice(0, 10))}`;
   } catch { }
-  $('#appFoot').innerHTML = `LFT Card Forge <b>v${VERSION}</b> · save format ${SAVE_FORMAT} · ${build} · <a href="https://github.com/dustooned/lftcf" target="_blank" rel="noopener">source</a>`;
+  $('#appFoot').innerHTML = `LFT Card Forge <b>v${VERSION} “${esc(CODENAME)}”</b> · released ${RELEASED} · ${build} · <button class="link" id="whatsNew">What’s new</button> · <a href="https://github.com/dustooned/lftcf" target="_blank" rel="noopener">source</a>`;
 }
+
+function whatsNew() {
+  ask({ title: `✨ What’s new`, body: CHANGELOG.map(r => `<h3 class="cl-h">v${r.v} “${esc(r.name)}” <small>${r.date}</small></h3><ul class="cl">${r.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>`).join(''), buttons: [{ label: 'Nice!', value: 'ok', primary: true }] });
+}
+$('#appFoot').addEventListener('click', e => { if (e.target.closest('#whatsNew')) whatsNew(); });
 
 // ---------------------------------------------------------------- boot
 (async () => {
@@ -1530,6 +1739,9 @@ async function renderFooter() {
   if (!saved) save();
   store.persist();
   renderFooter();
+  const seen = lsGet('forge-seen-version');
+  if (seen && seen !== VERSION) setTimeout(() => toast(`✨ Updated to v${VERSION} “${CODENAME}”. Tap “What’s new” at the bottom.`), 1200);
+  lsSet('forge-seen-version', VERSION);
   if (saved) warnIfNewer(saved, 'Your saved set');
   setView('library');
   if (!lsGet('forge-help-seen')) openHelp();
