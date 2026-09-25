@@ -2,12 +2,23 @@
 // can say which build they're on and anyone can find it again (the lftcf repo tags each one).
 // Bump SAVE_FORMAT only when the saved data shape changes in a way older Forges can't read,
 // and add a migration in upgrade().
-export const VERSION = '0.6.1';
-export const CODENAME = 'Shuffle & Stack';
-export const RELEASED = '2026-09-23';
+export const VERSION = '0.7.0';
+export const CODENAME = 'Table Ready';
+export const RELEASED = '2026-09-25';
 export const SAVE_FORMAT = 1;
 
 export const CHANGELOG = [
+  { v: '0.7.0', name: 'Table Ready', date: '2026-09-25', notes: [
+    '🕹 Send to playtest: one file with a deck and its finished card art for the playtest table (DECK → Load a deck → Import deck file).',
+    '🖨 Print sheets: 9 real-size cards per page with cut lines, for a deck, a selection or everything.',
+    'Decks show a cost curve and brand mix, and can be marked 🔴 Red / 🔵 Blue for the TTS game (exports data/decks.json).',
+    '🗑 Trash: deleted cards wait 30 days, and most library actions offer ↶ Undo.',
+    'Art tools: ⤢ Fill / ⊡ Fit / ✛ Center, plus brightness, contrast and color sliders.',
+    'Design your own card back (colors, tagline, logo). The rules check warns when text is hard to read.',
+    '📖 Manual tab covering every tool, with exports explained in one table.',
+    'Safer updates: a backup is taken before any save is upgraded, a banner offers to reload when a new version is out, and a second open tab can no longer overwrite your work.',
+    'Faster with big sets (cached card thumbnails) and snapshots that store each image only once.',
+  ] },
   { v: '0.6.1', name: 'Shuffle & Stack', date: '2026-09-23', notes: [
     'Emoji labels on the card-type filter: 🃏 All · 🥊 CHA · 😈 EXE · ⚡ ACT (hover for what each means).',
   ] },

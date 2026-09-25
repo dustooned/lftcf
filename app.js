@@ -1,8 +1,9 @@
-import { W, H, FONTS, SHAPES, SHAPE_LABELS, TIMING_LABEL, esc, cardInner, cardSVG, backSVG, handlesMarkup, layerTransform, accentFor, shapeIcon, shapeMarkup, isHolo, MASKS, EDIT_REGIONS } from './render.js';
+import { W, H, ART, FONTS, SHAPES, SHAPE_LABELS, TIMING_LABEL, esc, cardInner, cardSVG, backSVG, handlesMarkup, layerTransform, accentFor, shapeIcon, shapeMarkup, isHolo, MASKS, EDIT_REGIONS } from './render.js';
 import { EFFECTS, TARGET_LABELS, PASSIVES, TIMINGS, LIMITS, autoText, normalize, newCard, uniqueCardId, slug, newId, defaultLayout, toEngine, fromEngine, validate, parseAbility, randomName, randomAbility, toCSV, parseCSV, rowsToCards, cardsToRows, CSV_COLUMNS, SHEET_HELP } from './model.js';
 import * as store from './store.js';
 import { VERSION, SAVE_FORMAT, CODENAME, RELEASED, CHANGELOG } from './version.js';
 import { embed, extract } from './png-meta.js';
+import { SAFE_ID, DECK_SIZE, BASE_SHAPES, FOLDER_ICONS, TRASH_DAYS, DEFAULT_BACK, upgrade, registerNames as regNames, usedAssets, deckReport, deckStats, gameDecksJson, readability, playtestDeckData } from './project.js';
 
 const JSZIP = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm';
 const XLSX = 'https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs';
@@ -12,13 +13,9 @@ const cap = s => s ? s[0].toUpperCase() + s.slice(1) : s;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const clone = o => JSON.parse(JSON.stringify(o));
 const num = (v, d) => Number.isFinite(+v) && v !== '' && v != null ? +v : d;
-const SAFE_ID = { test: v => typeof v === 'string' && /^[\w-]{1,32}$/.test(v) }; // a bare regex would accept undefined as "undefined"
 const lsGet = k => { try { return localStorage.getItem(k); } catch { return null; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch { } };
 
-// Brand silhouettes from tools/build.mjs shapeSpecFor, used when the base set is loaded.
-const BASE_SHAPES = { 'Unassigned': 'circle', 'The Extremely Official Ninja Forum': 'hexagon', 'Snackforce 2000': 'triangle', 'B.O.R.E.D. Energy Drink': 'star5', 'PawSpace': 'pentagon', 'MegaMall After Dark': 'square', "Baby's First Apocalypse": 'star8' };
-const FOLDER_ICONS = ['🃏', '🧪', '📁', '⭐', '🔥', '⚔️', '🛡️', '🐒', '🍔', '🥤', '🐾', '🛒', '☢️', '🧪', '🎨', '💀', '✅', '🚧'];
 const PRESETS = {
   Classic:   { paper: '#fff9eb', ink: '#171724', border: '#171724', sub: '#454554', accent: '', font: 'Arial' },
   Midnight:  { paper: '#1f1f33', ink: '#f4f4ff', border: '#0b0b14', sub: '#b8b8d8', accent: '', font: 'Arial' },
@@ -46,9 +43,22 @@ const undoStack = [], redoStack = [];
 
 // ---------------------------------------------------------------- utilities
 let toastT;
-function toast(msg, bad = false) {
+function toast(msg, bad = false, action = null) {
   const t = $('#toast'); t.textContent = msg; t.classList.toggle('bad', bad); t.classList.add('show');
-  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), bad ? 4500 : 2600);
+  t.classList.toggle('has-action', !!action);
+  if (action) { const b = document.createElement('button'); b.className = 'toast-btn'; b.textContent = action.label; b.onclick = () => { t.classList.remove('show'); action.fn(); }; t.append(' ', b); }
+  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), action ? 7000 : bad ? 4500 : 2600);
+}
+// Library-level undo: snapshot the parts of the set that deck/trash actions change, offer Undo.
+const libState = () => JSON.stringify({ cards: P.cards, folders: P.folders, trash: P.trash, gameDecks: P.gameDecks });
+function undoable(msg, before) {
+  toast(msg, false, { label: '↶ Undo', fn: () => { Object.assign(P, JSON.parse(before)); save(); ui.picked.clear(); if (ui.view === 'editor') renderEditor(); else renderLibrary(); toast('Undone.'); } });
+}
+// Trash: deleted cards wait here for TRASH_DAYS before they're gone for good.
+function trashCards(cards) {
+  const at = Date.now();
+  P.trash.unshift(...cards.map(card => ({ at, card })));
+  P.cards = P.cards.filter(c => !cards.includes(c));
 }
 function ask({ title, body = '', buttons = [{ label: 'OK', value: 'ok', primary: true }] }) {
   const m = $('#modal'), f = $('#modalForm');
@@ -83,60 +93,27 @@ function href(id) {
 }
 
 // ---------------------------------------------------------------- project load / save
-// Everything that enters the app (saved state, save files, shared cards) passes through here,
-// so numbers are numbers and ids are safe before any of it reaches innerHTML.
-function cleanLayer(L) {
-  if (!L || !['image', 'text', 'shape', 'logo'].includes(L.kind)) return null;
-  const o = { id: SAFE_ID.test(L.id) ? L.id : newId(), kind: L.kind, x: num(L.x, 250), y: num(L.y, 301), scale: clamp(num(L.scale, 1), 0.01, 20), rot: num(L.rot, 0), opacity: clamp(num(L.opacity, 1), 0, 1), zone: L.zone === 'top' ? 'top' : 'art', flip: !!L.flip, hidden: !!L.hidden };
-  if (L.kind === 'image') { if (typeof L.asset !== 'string') return null; Object.assign(o, { asset: L.asset, w: num(L.w, 100), h: num(L.h, 100), name: String(L.name || 'Image').slice(0, 40), mask: MASKS[L.mask] ? L.mask : 'none' }); }
-  if (L.kind === 'text' || L.kind === 'shape') o.fill2 = /^#[0-9a-f]{6}$/i.test(L.fill2) ? L.fill2 : '';
-  if (L.kind === 'text') Object.assign(o, { text: String(L.text ?? '').slice(0, 80), size: clamp(num(L.size, 40), 4, 200), color: String(L.color || '#171724'), stroke: String(L.stroke || ''), font: String(L.font || 'Impact'), bold: L.bold !== false });
-  if (L.kind === 'shape') Object.assign(o, { shape: SHAPES[L.shape] ? L.shape : 'star5', fill: String(L.fill || '#ffda52'), stroke: String(L.stroke || '') });
-  return o;
-}
-function upgrade(o) {
-  const p = { format: 'lft-forge', setName: 'My Card Set', setCode: 'CUSTOM', credits: '', brands: [], tags: [], folders: [], cards: [], assets: {}, sheet: { url: '', auto: false }, ...o };
-  p.version = SAVE_FORMAT; p.forgeVersion = VERSION;
-  for (const k of ['setName', 'setCode', 'credits']) p[k] = String(p[k] ?? '');
-  p.brands = (p.brands || []).filter(b => b && b.name).map(b => ({ name: String(b.name), shape: SHAPES[b.shape] ? b.shape : 'circle', color: /^#[0-9a-f]{6}$/i.test(b.color) ? b.color : '', ...(SAFE_ID.test(b.logo) ? { logo: b.logo } : {}) }));
-  if (!p.brands.some(b => b.name === 'Unassigned')) p.brands.unshift({ name: 'Unassigned', shape: 'circle', color: '' });
-  p.tags = [...new Set((p.tags || []).map(String))];
-  p.folders = (p.folders || []).filter(f => f && SAFE_ID.test(f.id)).map(f => ({ id: f.id, name: String(f.name || 'Folder').slice(0, 40), icon: FOLDER_ICONS.includes(f.icon) ? f.icon : '📁', ...(f.sandbox ? { sandbox: true } : {}) }));
-  p.assets = Object.fromEntries(Object.entries(p.assets || {}).filter(([k, v]) => SAFE_ID.test(k) && /^data:image\/(png|jpeg|webp|gif);base64,/.test(v)));
-  p.sheet = { url: String(p.sheet?.url || ''), auto: !!p.sheet?.auto, last: p.sheet?.last || '' };
-  const folderIds = new Set(p.folders.map(f => f.id));
-  p.cards = (p.cards || []).filter(Boolean).map(c => {
-    c.uid = SAFE_ID.test(c.uid) ? c.uid : newId('c');
-    c.layout = { ...defaultLayout(), ...(c.layout || {}) };
-    c.layout.layers = (c.layout.layers || []).map(cleanLayer).filter(Boolean);
-    c.folders = (c.folders || []).filter(id => folderIds.has(id));
-    c.textMode = c.textMode === 'custom' ? 'custom' : 'auto';
-    return normalize(c);
-  });
-  for (const c of p.cards) registerNames(c, p);
-  return p;
-}
-function registerNames(c, p = P) {
-  if (c.type === 'CHA' && c.origin && !p.brands.some(b => b.name === c.origin)) p.brands.push({ name: c.origin, shape: BASE_SHAPES[c.origin] || 'circle', color: '' });
-  for (const t of [...(c.tags || []), ...(c.partners || [])]) if (!p.tags.includes(t) && !p.brands.some(b => b.name === t) && !p.cards.some(o => o.name === t)) p.tags.push(t);
-}
+// Loading, sanitising and deck logic live in project.js (pure, unit-tested).
+const registerNames = (c, p = P) => regNames(c, p);
 // Clean slate: a new Forge starts empty. The base game is one click away as examples.
 const emptyProject = () => upgrade({ setName: 'My Card Set' });
 async function baseProject() {
   const cards = await (await fetch('data/cards.json', { cache: 'no-cache' })).json();
   return upgrade({ setName: 'LOL, FIGHT TIEM!', setCode: 'BETA', brands: Object.entries(BASE_SHAPES).map(([name, shape]) => ({ name, shape })), folders: [{ id: 'fbase', name: 'Base game', icon: '🐒' }], cards: cards.map(o => ({ ...fromEngine(o), folders: ['fbase'] })) });
 }
-let saveT;
+let saveT, staleTab = false;
+const TAB = newId('t'), bc = 'BroadcastChannel' in self ? new BroadcastChannel('lft-forge') : null;
 function save() {
+  if (staleTab) { $('#status').textContent = '⚠ not saved (changed in another tab)'; return; }
   $('#status').textContent = 'saving…';
   clearTimeout(saveT);
   saveT = setTimeout(async () => {
-    try { await store.set('project', P); $('#status').textContent = '✓ saved ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
+    try { await store.set('project', P); bc?.postMessage({ type: 'saved', tab: TAB }); $('#status').textContent = '✓ saved ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
     catch (e) { console.error(e); $('#status').textContent = '⚠ not saved'; toast('Could not save in this browser (private window or storage full?). Download a save file!', true); }
   }, 350);
 }
 function gcAssets() {
-  const used = new Set([...P.cards.flatMap(c => c.layout.layers.filter(l => l.kind === 'image').map(l => l.asset)), ...P.brands.map(b => b.logo).filter(Boolean)]);
+  const used = usedAssets(P);
   for (const id of Object.keys(P.assets)) if (!used.has(id)) delete P.assets[id];
 }
 function resetTo(p) { P = p; ui.cur = null; ui.sel = null; ui.folder = 'all'; ui.picked.clear(); undoStack.length = redoStack.length = 0; save(); }
@@ -150,6 +127,7 @@ function setView(v) {
   if (v === 'editor') { if (!cur()) ui.cur = P.cards[0]?.uid; renderEditor(); }
   if (v === 'brands') renderBrands();
   if (v === 'share') renderShare();
+  if (v === 'manual') renderManual();
   window.scrollTo({ top: 0 });
   if (!$('#help').hidden) openHelp(0);
 }
@@ -160,20 +138,11 @@ function openEditor(uid) { ui.cur = uid; ui.sel = null; setView('editor'); }
 // ---------------------------------------------------------------- library + decks
 // "Decks" in the UI are `folders` in the data (a card can sit in several). A deck is
 // tournament-legal at exactly DECK_SIZE cards with distinct names (see src/rules.lua).
-const DECK_SIZE = 20;
 const inFolder = (c, f = ui.folder) => f === 'all' || (f === 'unfiled' ? !c.folders.length : c.folders.includes(f));
-const folderName = id => id === 'all' ? 'All cards' : id === 'unfiled' ? 'Not in a deck' : P.folders.find(f => f.id === id)?.name || '';
-function deckStatus(id) {
-  if (P.folders.find(f => f.id === id)?.sandbox) { const n = P.cards.filter(c => c.folders.includes(id)).length; return { n, legal: false, sandbox: true, note: 'experiments', label: String(n) }; }
-  const cs = P.cards.filter(c => c.folders.includes(id)), n = cs.length;
-  const dupes = n - new Set(cs.map(c => c.name.trim().toLowerCase())).size;
-  const bad = cs.filter(c => validate(c, P).some(v => v[0] === 'error')).length;
-  const legal = n === DECK_SIZE && !dupes && !bad;
-  const note = legal ? '✓ tournament-legal' : n < DECK_SIZE ? `needs ${DECK_SIZE - n} more` : n > DECK_SIZE ? `${n - DECK_SIZE} too many` : dupes ? `${dupes} duplicate name${dupes === 1 ? '' : 's'}` : `${bad} card${bad === 1 ? '' : 's'} with errors`;
-  return { n, legal, note, label: `${n}/${DECK_SIZE}` };
-}
+const folderName = id => id === 'all' ? 'All cards' : id === 'unfiled' ? 'Not in a deck' : id === 'trash' ? 'Trash' : P.folders.find(f => f.id === id)?.name || '';
+const deckStatus = id => deckReport(P, id);
 function renderFolders() {
-  if (ui.folder !== 'all' && ui.folder !== 'unfiled' && !P.folders.some(f => f.id === ui.folder)) ui.folder = 'all';
+  if (!['all', 'unfiled', 'trash'].includes(ui.folder) && !P.folders.some(f => f.id === ui.folder)) ui.folder = 'all';
   const row = (id, icon, name, count, edit) => `<div class="folder ${ui.folder === id ? 'on' : ''}" data-folder="${id}">
     <button class="fbtn" data-open-folder="${id}" title="${esc(name)}"><span class="ficon">${icon}</span><span class="fname">${esc(name)}</span><span class="fcount">${count}</span></button>
     ${edit ? `<button class="fmenu" data-edit-folder="${id}" title="Rename, duplicate, back up or delete" aria-label="Deck options for ${esc(name)}">⋯</button>` : ''}</div>`;
@@ -181,17 +150,20 @@ function renderFolders() {
     ${row('all', '🗂️', 'All cards', P.cards.length)}${row('unfiled', '📥', 'Not in a deck', P.cards.filter(c => !c.folders.length).length)}
     <div class="folder-sep"></div>
     ${P.folders.map(f => { const s = deckStatus(f.id); return row(f.id, f.icon, f.name, `${s.n}${s.legal ? ' ✓' : ''}`, true); }).join('')}
-    <button class="btn small newfolder" id="newFolder">+ New deck</button>`;
+    <button class="btn small newfolder" id="newFolder">+ New deck</button>
+    <div class="folder-sep"></div>${row('trash', '🗑️', 'Trash', P.trash.length)}`;
 }
 const welcomeArt = `<svg viewBox="0 0 220 150" aria-hidden="true"><g transform="rotate(-8 70 80)"><rect x="30" y="20" width="80" height="112" rx="8" fill="#171724"/><rect x="34" y="24" width="72" height="104" rx="6" fill="#fff9eb"/><rect x="38" y="28" width="64" height="22" rx="4" fill="#ff9ba7"/><rect x="38" y="56" width="64" height="34" fill="#89e4d7"/></g><g transform="rotate(7 150 80)"><rect x="110" y="20" width="80" height="112" rx="8" fill="#171724"/><rect x="114" y="24" width="72" height="104" rx="6" fill="#fff9eb"/><rect x="118" y="28" width="64" height="22" rx="4" fill="#ffda52"/><rect x="118" y="56" width="64" height="34" fill="#ceacff"/><text x="150" y="80" text-anchor="middle" font-family="Arial" font-weight="900" font-size="22" fill="#171724">?</text></g><polygon points="110,6 115,18 128,18 118,26 122,38 110,31 98,38 102,26 92,18 105,18" fill="#ffda52" stroke="#171724" stroke-width="3"/></svg>`;
 function renderLibrary() {
   renderFolders();
+  if (ui.folder === 'trash') return renderTrash();
   const f = ui.f;
   $('#fBrand').innerHTML = `<option value="all">Any brand</option>` + P.brands.map(b => `<option ${f.brand === b.name ? 'selected' : ''}>${esc(b.name)}</option>`).join('');
   $('#fTag').innerHTML = `<option value="all">Any allegiance</option>` + P.tags.map(t => `<option ${f.tag === t ? 'selected' : ''}>${esc(t)}</option>`).join('');
   for (const b of $$('#fType button')) b.setAttribute('aria-pressed', b.dataset.v === f.type);
   const fo = P.folders.find(x => x.id === ui.folder);
   $('#libTitle').textContent = `${fo ? fo.icon : ui.folder === 'unfiled' ? '📥' : '🗂️'} ${folderName(ui.folder)}`;
+  $('#libTools').hidden = false;
   const q = f.q.toLowerCase();
   const list = P.cards.map((c, i) => ({ c, i })).filter(({ c }) => inFolder(c) &&
     (!q || [c.name, c.text, c.origin, c.flavor, ...(c.tags || [])].join(' ').toLowerCase().includes(q)) &&
@@ -204,7 +176,7 @@ function renderLibrary() {
   const pool = P.cards.filter(c => inFolder(c)), inView = pool.length, avg = inView ? (pool.reduce((s, c) => s + c.cost, 0) / inView).toFixed(1) : 0;
   const meter = fo && !fo.sandbox ? (s => `<b class="deckmeter ${s.legal ? 'ok' : ''}" title="${esc(s.note)}">${s.n}/${DECK_SIZE}</b> ${esc(s.note)} · `)(deckStatus(fo.id)) : '';
   $('#libCount').innerHTML = `${meter}${list.length === inView ? '' : list.length + ' of '}${inView} card${inView === 1 ? '' : 's'} · ${pool.filter(c => c.type === 'CHA').length} CHA · ${pool.filter(c => c.type === 'ACT').length} ACT · avg ${avg} SP · ${Object.entries(TRIGGERS).map(([k, t]) => [t, pool.filter(c => triggerOf(c) === k).length]).filter(([, n]) => n).map(([t, n]) => `<span title="${esc(t.label)}">${t.icon}${n}</span>`).join(' ')}`;
-  $('#folderActs').innerHTML = fo ? (fo.sandbox ? `<button class="btn primary" data-fact="roll">🎲 Roll 5 more</button><button class="btn" data-fact="clear">🧹 Clear sandbox</button>` : `<button class="btn" data-fact="export">⬇ Export deck</button>`) + `<button class="btn" data-fact="version">📸 Snapshot</button><button class="btn" data-fact="edit">⋯ Deck</button>` : '';
+  $('#folderActs').innerHTML = fo ? (fo.sandbox ? `<button class="btn primary" data-fact="roll">🎲 Roll 5 more</button><button class="btn" data-fact="clear">🧹 Clear sandbox</button>` : `<button class="btn primary" data-fact="playtest" title="One file with this deck and its card art, for the playtest table">🕹 Send to playtest</button><button class="btn" data-fact="export">⬇ Export deck</button>`) + `<button class="btn" data-fact="print" title="Real-size print sheet, 9 cards per page">🖨 Print</button><button class="btn" data-fact="version">📸 Snapshot</button><button class="btn" data-fact="edit">⋯ Deck</button>` : '';
   $('#selectBtn').setAttribute('aria-pressed', ui.selecting);
   $('#selectBtn').textContent = ui.selecting ? '✓ Done selecting' : '☑ Select';
   renderSelbar(list.map(x => x.c));
@@ -221,19 +193,93 @@ function renderLibrary() {
   const tip = fo?.sandbox ? `<div class="tipcard slim">🧪 <b>Sandbox:</b> experiments live here and never count toward a deck. Tweak the fun ones, drag keepers onto a deck, then <b>🧹 Clear sandbox</b>.</div>`
     : ui.folder === 'all' && P.cards.length && !filtered && !lsGet('forge-tip-sandbox') ? `<div class="tipcard"><b>🧪 Tip: build by experimenting</b><p>Roll a handful of random cards into the Sandbox, tweak the ones that make you laugh, drag the keepers into a real deck, then clear the rest. Nothing in the Sandbox counts toward a deck.</p>
       <div class="btnrow"><button class="btn primary" data-act="roll5">🎲 Roll 5 into the Sandbox</button>${sb ? `<button class="btn" data-open-folder="${sb.id}">Open Sandbox</button>` : ''}<button class="link small" data-act="hideTip">Hide this tip</button></div></div>` : '';
-  $('#grid').innerHTML = tip + (showStacks ? stacksMarkup() : '') + (empty || '') + (empty ? '' : list.map(({ c, i }) => {
+  const summary = fo && !fo.sandbox && pool.length ? deckSummary(fo) : '';
+  $('#grid').innerHTML = tip + summary + (showStacks ? stacksMarkup() : '') + (empty || '') + (empty ? '' : list.map(({ c, i }) => {
     const errs = validate(c, P).filter(v => v[0] === 'error').length, picked = ui.picked.has(c.uid);
     const fIcons = c.folders.map(id => P.folders.find(x => x.id === id)?.icon).filter(Boolean).join('');
     return `<button class="tile ${picked ? 'picked' : ''} ${isHolo(c) ? 'holo' : ''}" data-uid="${c.uid}" title="${ui.selecting ? 'Select' : 'Edit'} ${esc(c.name)} (hold to drag)" ${ui.selecting ? `aria-pressed="${picked}"` : ''}>
-      <div class="card-wrap">${cardSVG(c, { project: P, index: i, uid: 't' + i, href })}${errs ? `<span class="badge" title="${errs} problem(s)">!</span>` : ''}${ui.selecting ? `<span class="pick">${picked ? '✓' : ''}</span>` : ''}</div>
+      <div class="card-wrap">${thumbImg(c, i)}${errs ? `<span class="badge" title="${errs} problem(s)">!</span>` : ''}${ui.selecting ? `<span class="pick">${picked ? '✓' : ''}</span>` : ''}</div>
       <div class="cap"><b>${esc(c.name)}</b><span class="pill">${c.type === 'CHA' && c.edgelord ? 'EXE' : c.type}</span><span class="pill">${c.cost} SP</span><span class="pill trig" title="${esc(TRIGGERS[triggerOf(c)]?.label)}">${TRIGGERS[triggerOf(c)]?.icon} ${TRIGGERS[triggerOf(c)]?.short}</span>${c.type === 'CHA' ? `<span class="pill">${c.hp} HP</span>` : ''}${fIcons ? `<span title="In decks">${fIcons}</span>` : ''}</div></button>`;
   }).join(''));
+  queueThumbs();
 }
+// Deck header: cost curve, brand mix, and whether it's the Red or Blue deck in the TTS game.
+function deckSummary(fo) {
+  const s = deckStatus(fo.id), st = deckStats(s.cards), max = Math.max(1, ...st.curve);
+  const bars = st.curve.map((n, i) => { const h = Math.round(n / max * 44); return `<g><rect x="${8 + i * 29}" y="${62 - h}" width="22" height="${h}" rx="3" class="bar"/><text x="${19 + i * 29}" y="${56 - h}" class="bv">${n || ''}</text><text x="${19 + i * 29}" y="78" class="bl">${i === 7 ? '7+' : i}</text></g>`; }).join('');
+  const side = ['Red', 'Blue'].find(k => P.gameDecks[k] === fo.id) || '';
+  return `<div class="decksum">
+    <div class="ds-box"><b>Cost curve</b> <small>(SP)</small><svg viewBox="0 0 240 84" role="img" aria-label="Cards by cost: ${st.curve.map((n, i) => `${n} at ${i}`).join(', ')}">${bars}</svg></div>
+    <div class="ds-box"><b>Brand mix</b><div class="chips">${st.brands.map(([k, n]) => `<span class="chip static">${esc(k)} <b>${n}</b></span>`).join('')}</div></div>
+    <div class="ds-box"><b>In the TTS game</b><div class="seg">${[['', 'Not used'], ['Red', '🔴 Red deck'], ['Blue', '🔵 Blue deck']].map(([k, l]) => `<button type="button" data-game="${k}" aria-pressed="${side === k}">${l}</button>`).join('')}</div>
+      <small class="${s.legal ? 'ok' : 'warnc'}">${s.legal ? '✓ Ready: 20 cards, all different.' : `Not tournament-legal yet: ${esc(s.note)}.`} Exports include <code>data/decks.json</code>.</small></div>
+  </div>`;
+}
+// ---- Trash view: deleted cards wait here for TRASH_DAYS days.
+function renderTrash() {
+  $('#libTitle').textContent = '🗑️ Trash';
+  $('#libTools').hidden = true; $('#selbar').hidden = true;
+  $('#libCount').textContent = `${P.trash.length} card${P.trash.length === 1 ? '' : 's'} · kept for ${TRASH_DAYS} days`;
+  $('#folderActs').innerHTML = P.trash.length ? `<button class="btn primary" data-fact="restoreAll">↩ Restore all</button><button class="btn danger-btn" data-fact="emptyTrash">🔥 Empty trash</button>` : '';
+  $('#grid').innerHTML = P.trash.length ? P.trash.map((t, i) => {
+    const days = Math.max(0, TRASH_DAYS - Math.floor((Date.now() - t.at) / 864e5));
+    return `<div class="ttile"><div class="card-wrap">${thumbImg(t.card, -1)}</div><div class="cap"><b>${esc(t.card.name)}</b><span class="pill">${days}d left</span></div>
+      <div class="btnrow"><button class="btn small primary" data-trash-restore="${i}">↩ Restore</button><button class="btn small danger-btn" data-trash-del="${i}">Delete forever</button></div></div>`;
+  }).join('') : '<div class="empty">The Trash is empty. Deleted cards wait here for ' + TRASH_DAYS + ' days, so a mis-click is never permanent.</div>';
+  queueThumbs();
+}
+function restoreFromTrash(indexes) {
+  const before = libState(), items = indexes.map(i => P.trash[i]).filter(Boolean), ids = new Set(P.folders.map(f => f.id));
+  for (const t of items) {
+    const c = t.card;
+    if (P.cards.some(x => x.id === c.id)) c.id = uniqueCardId(c.name, P.cards);
+    if (P.cards.some(x => x.uid === c.uid)) c.uid = newId('c');
+    c.folders = c.folders.filter(id => ids.has(id));
+    P.cards.push(c);
+  }
+  P.trash = P.trash.filter(t => !items.includes(t));
+  save(); renderLibrary(); undoable(`↩ Restored ${items.length} card${items.length === 1 ? '' : 's'}.`, before);
+}
+// ---- Thumbnails. Every tile used to be a full live SVG; past ~100 cards that gets sluggish.
+// Now each card is rasterised once (JPEG, half size), cached in memory and in IndexedDB, and
+// only re-rendered when something that shows on the card actually changes.
+const thumbURL = new Map(), thumbPending = new Map();
+let thumbStore = {}, thumbBusy = false, thumbSaveT;
+const hashStr = s => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36); };
+function thumbKey(c, index) {
+  const { uid, folders, autoId, ...shown } = c;
+  const brand = P.brands.find(b => b.name === c.origin);
+  return hashStr(JSON.stringify([shown, index, P.setName, brand])) + c.layout.layers.length;
+}
+function thumbImg(c, index) {
+  const key = thumbKey(c, index);
+  if (!thumbURL.has(key) && thumbStore[key]) thumbURL.set(key, URL.createObjectURL(dataURLtoBlob(thumbStore[key])));
+  if (thumbURL.has(key)) return `<img class="thumb" src="${thumbURL.get(key)}" alt="" draggable="false">`;
+  thumbPending.set(key, { c, index });
+  return `<img class="thumb pending" data-thumb="${key}" alt="" draggable="false">`;
+}
+async function queueThumbs() {
+  if (thumbBusy) return; thumbBusy = true;
+  try {
+    for (const [key, { c, index }] of thumbPending) {
+      thumbPending.delete(key);
+      if (thumbURL.has(key) || !document.querySelector(`img[data-thumb="${key}"]`)) continue;
+      const blob = await toImage(exportSVG(c, index, 0.5), W / 2, H / 2, 'image/jpeg', 0.82);
+      thumbURL.set(key, URL.createObjectURL(blob));
+      for (const img of $$(`img[data-thumb="${key}"]`)) { img.src = thumbURL.get(key); img.classList.remove('pending'); img.removeAttribute('data-thumb'); }
+      thumbStore[key] = await blobToDataURL(blob);
+    }
+  } finally { thumbBusy = false; }
+  if (thumbPending.size) return queueThumbs();
+  clearTimeout(thumbSaveT);
+  thumbSaveT = setTimeout(() => { const keys = Object.keys(thumbStore); for (const k of keys.slice(0, Math.max(0, keys.length - 400))) delete thumbStore[k]; store.set('thumbs', thumbStore).catch(() => { }); }, 1500);
+}
+
 // Procreate-style stacks: each deck is a little fanned pile of its first cards.
 function stacksMarkup() {
   return `<div class="stacks-h">Decks</div>${P.folders.map(f => {
     const cs = P.cards.filter(c => c.folders.includes(f.id)), top = cs.slice(0, 3).reverse(), s = deckStatus(f.id);
-    return `<div class="stack" data-folder="${f.id}"><button class="stack-pile" data-open-folder="${f.id}" title="Open ${esc(f.name)}">${top.length ? top.map((c, k) => `<span class="sc sc${top.length - 1 - k}">${cardSVG(c, { project: P, index: P.cards.indexOf(c), uid: 's' + f.id + k, href })}</span>`).join('') : '<span class="sc sc0 empty-pile">empty</span>'}</button>
+    return `<div class="stack" data-folder="${f.id}"><button class="stack-pile" data-open-folder="${f.id}" title="Open ${esc(f.name)}">${top.length ? top.map((c, k) => `<span class="sc sc${top.length - 1 - k}">${thumbImg(c, P.cards.indexOf(c))}</span>`).join('') : '<span class="sc sc0 empty-pile">empty</span>'}</button>
       <div class="cap"><b>${f.icon} ${esc(f.name)}</b><span class="pill deckpill ${s.legal ? 'ok' : ''}" title="${esc(s.note)}">${s.label}</span><button class="fmenu" data-edit-folder="${f.id}" title="Rename, duplicate, back up…" aria-label="Deck options">⋯</button></div></div>`;
   }).join('')}<div class="stacks-h">All cards</div>`;
 }
@@ -252,6 +298,7 @@ function renderSelbar(visible) {
     ${inReal ? `<button class="btn small" data-sel="removeFrom" ${n ? '' : 'disabled'}>Remove from this deck</button>` : ''}
     <button class="btn small" data-sel="dup" ${n ? '' : 'disabled'}>⧉ Duplicate</button>
     <button class="btn small" data-sel="export" ${n ? '' : 'disabled'}>⬇ Export ZIP</button>
+    <button class="btn small" data-sel="print" ${n ? '' : 'disabled'}>🖨 Print</button>
     <button class="btn small danger-btn" data-sel="del" ${n ? '' : 'disabled'}>🗑 Delete</button>`;
 }
 async function pickFolder(title) {
@@ -278,7 +325,7 @@ async function editFolder(id) {
   if (v === 'version') return saveVersion(f.id);
   if (v === 'export') return exportZip(P.cards.filter(c => c.folders.includes(f.id)), f.name);
   if (v === 'ok') { f.name = $('#modalInput').value.trim() || f.name; f.icon = $('#modalForm input[name=ficon]:checked')?.value || f.icon; }
-  if (v === 'del') { P.folders = P.folders.filter(x => x !== f); for (const c of P.cards) c.folders = c.folders.filter(x => x !== id); if (ui.folder === id) ui.folder = 'all'; toast('Deck deleted (cards kept)'); }
+  if (v === 'del') { const before = libState(); P.folders = P.folders.filter(x => x !== f); for (const c of P.cards) c.folders = c.folders.filter(x => x !== id); for (const s of ['Red', 'Blue']) if (P.gameDecks[s] === id) P.gameDecks[s] = ''; if (ui.folder === id) ui.folder = 'all'; undoable('Deck deleted (cards kept).', before); }
   if (v) { save(); renderLibrary(); }
 }
 function duplicateCards(cards, folders) {
@@ -288,15 +335,17 @@ async function duplicateFolder(f) {
   const cs = P.cards.filter(c => c.folders.includes(f.id));
   const v = await ask({ title: `⧉ Duplicate “${esc(f.name)}”`, body: `<p><b>Same cards</b>: a second deck with the same ${cs.length} cards (edit a card once, both decks update). Handy for trying deck variants.</p><p><b>Copy the cards</b>: brand-new copies you can change without touching the originals.</p>`, buttons: [{ label: 'Cancel', value: '' }, { label: 'Same cards', value: 'ref' }, { label: 'Copy the cards', value: 'copy', primary: true }] });
   if (!v) return;
+  const before = libState();
   const nf = { id: newId('f'), name: f.name + ' copy', icon: f.icon }; P.folders.push(nf);
   if (v === 'ref') for (const c of cs) c.folders.push(nf.id); else duplicateCards(cs, [nf.id]);
-  save(); ui.folder = nf.id; renderLibrary(); toast(`⧉ Made “${nf.name}”`);
+  save(); ui.folder = nf.id; renderLibrary(); undoable(`⧉ Made “${nf.name}”`, before);
 }
 function addToFolder(uids, id) {
+  const before = libState();
   let n = 0;
   for (const c of P.cards) if (uids.includes(c.uid)) { if (id === 'unfiled') { if (c.folders.length) n++; c.folders = []; } else if (!c.folders.includes(id)) { c.folders.push(id); n++; } }
   save(); renderLibrary();
-  toast(id === 'unfiled' ? `Took ${n} out of all decks` : `${P.folders.find(f => f.id === id)?.icon} Added ${n} card${n === 1 ? '' : 's'} to “${folderName(id)}”`);
+  undoable(id === 'unfiled' ? `Took ${n} out of all decks` : `${P.folders.find(f => f.id === id)?.icon} Added ${n} card${n === 1 ? '' : 's'} to “${folderName(id)}”`, before);
 }
 function addCard(c, open = true) {
   c.uid = newId('c');
@@ -345,10 +394,11 @@ async function clearSandbox() {
   const sb = sandbox(); if (!sb) return;
   const cs = P.cards.filter(c => c.folders.includes(sb.id)), only = cs.filter(c => c.folders.length === 1), kept = cs.length - only.length;
   if (!cs.length) return toast('The Sandbox is already empty.');
-  if (!await confirmAsk('🧹 Clear the Sandbox?', `Delete the <b>${only.length}</b> card${only.length === 1 ? '' : 's'} that only live in the Sandbox${kept ? `, and take ${kept} card${kept === 1 ? '' : 's'} that are also in real decks out of it (they stay in those decks)` : ''}? Tip: take a 📸 Snapshot first if you're unsure.`, 'Clear')) return;
-  P.cards = P.cards.filter(c => !only.includes(c));
+  if (!await confirmAsk('🧹 Clear the Sandbox?', `Move the <b>${only.length}</b> card${only.length === 1 ? '' : 's'} that only live in the Sandbox to the 🗑 Trash${kept ? `, and take ${kept} card${kept === 1 ? '' : 's'} that are also in real decks out of it (they stay in those decks)` : ''}? The Trash keeps them for ${TRASH_DAYS} days.`, 'Clear')) return;
+  const before = libState();
+  trashCards(only);
   for (const c of P.cards) c.folders = c.folders.filter(x => x !== sb.id);
-  ui.picked.clear(); save(); renderLibrary(); toast('🧹 Sandbox cleared');
+  ui.picked.clear(); save(); renderLibrary(); undoable('🧹 Sandbox cleared.', before);
 }
 function newFromButton(kind) { if (kind === 'random') surprise(); else addCard(newCard(kind, P)); }
 
@@ -370,7 +420,7 @@ function renderTray() {
   $('#dropTray').innerHTML = `<div class="dt-h">Drop <b>${n} card${n === 1 ? '' : 's'}</b> on a deck</div><div class="dt-grid">
     ${P.folders.filter(f => f.id !== ui.folder).map(f => { const s = deckStatus(f.id); return item(f.id, f.icon, f.name, `<small class="${s.legal ? 'ok' : ''}">${s.label}</small>`); }).join('')}
     ${item('new', '＋', 'New deck', '', 'new')}${item('dup', '⧉', here ? `Duplicate in ${here.name}` : 'Duplicate')}
-    ${here ? item('remove', '➖', `Remove from ${here.name}`, '', 'out') : item('unfiled', '📥', 'Take out of all decks', '', 'out')}</div>`;
+    ${here ? item('remove', '➖', `Remove from ${here.name}`, '', 'out') : item('unfiled', '📥', 'Take out of all decks', '', 'out')}${item('trash', '🗑️', 'Trash', '', 'out')}</div>`;
 }
 function startDrag() {
   if (!drag || drag.active) return;
@@ -379,7 +429,7 @@ function startDrag() {
   drag.uids = ui.picked.has(drag.uid) ? [...ui.picked] : [drag.uid];
   navigator.vibrate?.(12);
   const g = document.createElement('div'); g.className = 'drag-ghost';
-  g.innerHTML = (drag.tile.querySelector('.card-wrap svg')?.outerHTML || '') + (drag.uids.length > 1 ? `<span class="dg-n">${drag.uids.length}</span>` : '');
+  g.innerHTML = (drag.tile.querySelector('.card-wrap img, .card-wrap svg')?.outerHTML || '') + (drag.uids.length > 1 ? `<span class="dg-n">${drag.uids.length}</span>` : '');
   document.body.append(g); drag.ghost = g;
   drag.tile.classList.add('lifted');
   renderTray(); $('#dropTray').hidden = false; document.body.classList.add('card-dragging');
@@ -422,11 +472,12 @@ function endDrag() {
   }
 }
 async function dropCards(uids, target) {
-  const cards = P.cards.filter(c => uids.includes(c.uid)), here = P.folders.find(f => f.id === ui.folder);
+  const cards = P.cards.filter(c => uids.includes(c.uid)), here = P.folders.find(f => f.id === ui.folder), before = libState();
   if (!cards.length) return;
-  if (target === 'dup') { duplicateCards(cards, here ? [here.id] : []); save(); renderLibrary(); return toast(`⧉ Duplicated ${cards.length}`); }
+  if (target === 'dup') { duplicateCards(cards, here ? [here.id] : []); save(); renderLibrary(); return undoable(`⧉ Duplicated ${cards.length}`, before); }
   if (target === 'unfiled') return addToFolder(uids, 'unfiled');
-  if (target === 'remove' && here) { for (const c of cards) c.folders = c.folders.filter(x => x !== here.id); ui.picked.clear(); save(); renderLibrary(); return toast(`Removed ${cards.length} from “${here.name}”`); }
+  if (target === 'trash') { trashCards(cards); ui.picked.clear(); save(); renderLibrary(); return undoable(`🗑 Moved ${cards.length} to the Trash.`, before); }
+  if (target === 'remove' && here) { for (const c of cards) c.folders = c.folders.filter(x => x !== here.id); ui.picked.clear(); save(); renderLibrary(); return undoable(`Removed ${cards.length} from “${here.name}”`, before); }
   if (target === 'new') { const nf = await createFolder(); if (!nf) return; target = nf.id; }
   const f = P.folders.find(x => x.id === target); if (!f) return;
   const fresh = cards.filter(c => !c.folders.includes(f.id));
@@ -442,7 +493,7 @@ async function dropCards(uids, target) {
   else for (const c of fresh) { c.folders.push(f.id); if (v === 'move') c.folders = c.folders.filter(x => x !== here.id); }
   ui.picked.clear(); save(); renderLibrary();
   const s = deckStatus(f.id);
-  toast(`${f.icon} ${v === 'dup' ? 'Duplicated' : v === 'move' ? 'Moved' : 'Added'} ${fresh.length} → “${f.name}” (${s.n}/${DECK_SIZE}${s.legal ? ' ✓' : ''})`);
+  undoable(`${f.icon} ${v === 'dup' ? 'Duplicated' : v === 'move' ? 'Moved' : 'Added'} ${fresh.length} → “${f.name}” (${s.label}${s.legal ? ' ✓' : ''})`, before);
 }
 let marq = null;
 function startMarquee(e) {
@@ -514,26 +565,30 @@ addEventListener('touchcancel', () => { if (drag?.touch) stopDrag(); });
 $('#grid').addEventListener('contextmenu', e => { if (e.target.closest('.tile')) e.preventDefault(); });
 $('#selbar').addEventListener('click', async e => {
   const b = e.target.closest('[data-sel]'); if (!b) return;
-  const a = b.dataset.sel, uids = [...ui.picked], picked = P.cards.filter(c => ui.picked.has(c.uid));
+  const a = b.dataset.sel, uids = [...ui.picked], picked = P.cards.filter(c => ui.picked.has(c.uid)), before = libState();
   if (a === 'all') { for (const id of $('#selbar').dataset.visible.split(',').filter(Boolean)) ui.picked.add(id); }
   if (a === 'none') ui.picked.clear();
   if (a === 'addTo') { const id = await pickFolder(`Add ${uids.length} card${uids.length === 1 ? '' : 's'} to…`); if (id) return dropCards(uids, id); }
-  if (a === 'removeFrom') { for (const c of picked) c.folders = c.folders.filter(x => x !== ui.folder); ui.picked.clear(); save(); toast(`Removed ${picked.length} from “${folderName(ui.folder)}”`); }
-  if (a === 'dup') { duplicateCards(picked, P.folders.some(f => f.id === ui.folder) ? [ui.folder] : []); save(); toast(`Duplicated ${picked.length}`); }
+  if (a === 'removeFrom') { for (const c of picked) c.folders = c.folders.filter(x => x !== ui.folder); ui.picked.clear(); save(); undoable(`Removed ${picked.length} from “${folderName(ui.folder)}”`, before); }
+  if (a === 'dup') { duplicateCards(picked, P.folders.some(f => f.id === ui.folder) ? [ui.folder] : []); save(); undoable(`Duplicated ${picked.length}`, before); }
   if (a === 'export') return exportZip(picked, `${folderName(ui.folder)}-selection`);
-  if (a === 'del' && await confirmAsk('Delete cards?', `Delete <b>${picked.length}</b> card${picked.length === 1 ? '' : 's'} for good? (A downloaded save file can bring them back.)`, 'Delete')) {
-    P.cards = P.cards.filter(c => !ui.picked.has(c.uid)); ui.picked.clear(); save(); toast('Deleted');
-  }
+  if (a === 'print') return printSheet(picked, `${folderName(ui.folder)} selection`);
+  if (a === 'del') { trashCards(picked); ui.picked.clear(); save(); undoable(`🗑 Moved ${picked.length} to the Trash.`, before); }
   renderLibrary();
 });
 $('#selectBtn').addEventListener('click', () => { ui.selecting = !ui.selecting; ui.picked.clear(); renderLibrary(); });
-$('#folderActs').addEventListener('click', e => {
-  const a = e.target.closest('[data-fact]')?.dataset.fact, f = P.folders.find(x => x.id === ui.folder); if (!a || !f) return;
+$('#folderActs').addEventListener('click', async e => {
+  const a = e.target.closest('[data-fact]')?.dataset.fact;
+  if (a === 'restoreAll') return restoreFromTrash(P.trash.map((_, i) => i));
+  if (a === 'emptyTrash') { if (await confirmAsk('🔥 Empty the Trash?', `Permanently delete ${P.trash.length} card${P.trash.length === 1 ? '' : 's'}? This can't be undone.`, 'Delete forever')) { P.trash = []; gcAssets(); save(); renderLibrary(); toast('Trash emptied.'); } return; }
+  const f = P.folders.find(x => x.id === ui.folder); if (!a || !f) return;
   if (a === 'export') exportZip(P.cards.filter(c => c.folders.includes(f.id)), f.name);
   if (a === 'version') saveVersion(f.id);
   if (a === 'edit') editFolder(f.id);
   if (a === 'roll') rollSandbox(5);
   if (a === 'clear') clearSandbox();
+  if (a === 'playtest') playtestFile([f], f.name);
+  if (a === 'print') printSheet(P.cards.filter(c => c.folders.includes(f.id)), f.name);
 });
 // Zoom the card grid (slider, or Ctrl + scroll wheel over the cards).
 function setZoom(px) { px = clamp(Math.round(px), 90, 320); document.documentElement.style.setProperty('--tile', px + 'px'); $('#zoom').value = px; lsSet('forge-zoom', px); }
@@ -775,7 +830,11 @@ function renderLayerBar() {
     <label><input type="checkbox" data-lf="hasStroke" ${L.stroke ? 'checked' : ''}> Outline</label><input type="color" data-lf="stroke" value="${esc(L.stroke || '#171724')}" aria-label="Outline color">
     <select data-lf="font" aria-label="Font" style="width:auto">${fontOpts}</select>
     <label><input type="checkbox" data-lf="hasFill2" ${L.fill2 ? 'checked' : ''}> Gradient</label><input type="color" data-lf="fill2" value="${esc(L.fill2 || '#ceacff')}" aria-label="Gradient end color"></div>` : ''}
-  ${L.kind === 'image' ? `<div class="row"><label>Mask <select data-lf="mask" style="width:auto">${Object.entries(MASKS).map(([k, v]) => `<option value="${k}" ${(L.mask || 'none') === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label><span class="hint">Crops the picture into a shape. It always stays inside the card.</span></div>` : ''}
+  ${L.kind === 'image' ? `<div class="row"><button class="btn small" data-la="fill" title="Cover the whole art window">⤢ Fill art</button><button class="btn small" data-la="fit" title="Show the whole picture inside the art window">⊡ Fit art</button><button class="btn small" data-la="center">✛ Center</button><button class="btn small" data-la="resetLook">↺ Reset look</button></div>
+  <label class="slider">☀ Bright <input type="range" data-lf="bright" min="0.2" max="2" step="0.05" value="${L.bright ?? 1}"></label>
+  <label class="slider">◐ Contrast <input type="range" data-lf="contrast" min="0.2" max="2" step="0.05" value="${L.contrast ?? 1}"></label>
+  <label class="slider">🎨 Color <input type="range" data-lf="sat" min="0" max="2" step="0.05" value="${L.sat ?? 1}"></label>
+  <div class="row"><label>Mask <select data-lf="mask" style="width:auto">${Object.entries(MASKS).map(([k, v]) => `<option value="${k}" ${(L.mask || 'none') === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label><span class="hint">Crops the picture into a shape. It always stays inside the card.</span></div>` : ''}
   ${L.kind === 'logo' ? `<div class="row"><span class="hint">Shows this card's brand logo. Upload logos in the Brands tab. Use <b>Fade</b> to make it a watermark.</span></div>` : ''}
   ${L.kind === 'shape' ? `<div class="row"><select data-lf="shape" aria-label="Shape" style="width:auto">${Object.keys(SHAPES).map(s => `<option value="${s}" ${L.shape === s ? 'selected' : ''}>${SHAPE_LABELS[s]}</option>`).join('')}</select>
     <label>Fill <input type="color" data-lf="fill" value="${esc(L.fill)}"></label>
@@ -797,6 +856,7 @@ $('#layerBar').addEventListener('input', e => {
   else if (k === 'hasFill2') L.fill2 = el.checked ? ($('#layerBar [data-lf="fill2"]').value || '#ceacff') : '';
   else if (k === 'fill2') { L.fill2 = el.value; const cb = $('#layerBar [data-lf="hasFill2"]'); if (cb) cb.checked = true; }
   else if (['scale', 'rot', 'opacity'].includes(k)) { L[k] = +el.value; updateLayerDOM(L); save(); return; }
+  else if (['bright', 'contrast', 'sat'].includes(k)) { L[k] = +el.value; renderStage(); save(); return; }
   else L[k] = el.value;
   renderStage(); save();
   if (k === 'text' && ui.sec === 'layers') renderInspector();
@@ -807,6 +867,12 @@ function layerAction(a, id = ui.sel) {
   const layers = c.layout.layers, i = layers.findIndex(l => l.id === id), L = layers[i]; if (!L) return;
   if (a === 'done') return select(null);
   snap();
+  if (a === 'fill' || a === 'fit') {
+    const pick = a === 'fill' ? Math.max : Math.min;
+    Object.assign(L, { zone: 'art', rot: 0, x: ART.x + ART.w / 2, y: ART.y + ART.h / 2, scale: pick(ART.w / L.w, ART.h / L.h) });
+  }
+  if (a === 'center') Object.assign(L, L.zone === 'top' ? { x: W / 2, y: H / 2 } : { x: ART.x + ART.w / 2, y: ART.y + ART.h / 2 });
+  if (a === 'resetLook') Object.assign(L, { bright: 1, contrast: 1, sat: 1 });
   if (a === 'zone') L.zone = L.zone === 'top' ? 'art' : 'top';
   if (a === 'flip') L.flip = !L.flip;
   if (a === 'hide') L.hidden = !L.hidden;
@@ -966,7 +1032,7 @@ function secLayers(c) {
 }
 function renderChecks() {
   const c = cur(); if (!c) return;
-  const v = validate(c, P), ic = { error: '❌', warn: '⚠️', tip: '💡' };
+  const v = [...validate(c, P), ...readability(c).map(m => ['warn', m])], ic = { error: '❌', warn: '⚠️', tip: '💡' };
   $('#checks').innerHTML = v.length ? `<ul>${v.map(([lvl, m]) => `<li class="${lvl}">${ic[lvl]} ${esc(m)}</li>`).join('')}</ul>` : `<div class="ok">✅ All good. Ready to FIGHT.</div>`;
 }
 
@@ -1013,9 +1079,10 @@ inspector.addEventListener('click', async e => {
     const i = P.cards.indexOf(c), j = act === 'moveUp' ? i - 1 : i + 1;
     if (j >= 0 && j < P.cards.length) { [P.cards[i], P.cards[j]] = [P.cards[j], P.cards[i]]; renderStage(); updateTitle(); save(); }
   }
-  if (act === 'del' && await confirmAsk('Delete card?', `Delete <b>${esc(c.name)}</b> for good? (A downloaded save file can bring it back.)`, 'Delete')) {
-    const i = P.cards.indexOf(c); P.cards.splice(i, 1); ui.cur = P.cards[Math.max(0, i - 1)]?.uid; ui.sel = null; save();
-    renderEditor(); toast('Card deleted');
+  if (act === 'del') {
+    const before = libState(), i = P.cards.indexOf(c);
+    trashCards([c]); ui.cur = P.cards[Math.max(0, i - 1)]?.uid; ui.sel = null; save();
+    renderEditor(); undoable(`🗑 “${c.name}” moved to the Trash.`, before);
   }
   if (act === 'newFolder') { const f = await createFolder(); if (f) apply('folders', [...c.folders, f.id], true); }
   if (act === 'newBrand') { const n = await promptText('New brand', 'Brand name (e.g. "Snackforce 2000")'); if (n && addBrand(n)) apply('origin', n, true); }
@@ -1101,16 +1168,22 @@ async function logoFromFile(file) {
 }
 $('#logoPick').addEventListener('change', async e => {
   const file = e.target.files[0]; e.target.value = '';
-  const b = P.brands[logoTarget]; if (!file || !b) return;
-  try { const id = newId('a'); P.assets[id] = await logoFromFile(file); b.logo = id; save(); renderBrands(); toast(`🏷 Logo set for ${b.name}`); }
+  const b = logoTarget === 'back' ? P.back : P.brands[logoTarget]; if (!file || !b) return;
+  try { const id = newId('a'); P.assets[id] = await logoFromFile(file); b.logo = id; save(); renderBrands(); toast(logoTarget === 'back' ? '🏷 Logo added to the card back' : `🏷 Logo set for ${b.name}`); }
   catch (err) { toast(err.message, true); }
 });
 function renderBrands() {
+  const bk = P.back, bcol = (k, l) => `<label class="inline small"><input type="color" data-back="${k}" value="${esc(bk[k])}"> ${l}</label>`;
   $('#setInfo').innerHTML = `
     <div class="field"><label for="sName">Set name <span class="muted">(printed on every card)</span></label><input type="text" id="sName" data-set="setName" value="${esc(P.setName)}" maxlength="32"></div>
     <div class="two"><div class="field"><label for="sCode">Set code</label><input type="text" id="sCode" data-set="setCode" value="${esc(P.setCode || '')}" maxlength="12"></div>
     <div class="field"><label for="sCred">Made by</label><input type="text" id="sCred" data-set="credits" value="${esc(P.credits || '')}" maxlength="60"></div></div>
-    <p class="muted small">${P.cards.length} cards · ${P.cards.filter(c => c.type === 'CHA').length} CHA · ${P.cards.filter(c => c.type === 'ACT').length} ACT · ${P.brands.length} brands · ${P.tags.length} allegiances · ${P.folders.length} decks</p>`;
+    <p class="muted small">${P.cards.length} cards · ${P.cards.filter(c => c.type === 'CHA').length} CHA · ${P.cards.filter(c => c.type === 'ACT').length} ACT · ${P.brands.length} brands · ${P.tags.length} allegiances · ${P.folders.length} decks</p>
+    <div class="field"><span class="lbl">Card back <span class="muted">(used in TTS sheets, print and playtest)</span></span>
+      <div class="backedit"><div class="backprev" id="backPrev">${backMarkup(0.34, true)}</div>
+      <div class="backctl"><div class="two">${bcol('bg', 'Background')}${bcol('frame', 'Frame')}${bcol('stripe', 'Stripes')}${bcol('ink', 'Text')}</div>
+        <label class="field" style="display:block;margin-top:8px"><span class="lbl">Tagline</span><input type="text" data-back="tagline" value="${esc(bk.tagline)}" maxlength="40"></label>
+        <div class="btnrow"><button class="btn small" id="backLogo">🏷 ${bk.logo ? 'Change' : 'Add'} logo</button>${bk.logo ? '<button class="btn small" id="backLogoDel">✕ Remove logo</button>' : ''}<button class="btn small" id="backReset">↺ Reset</button></div></div></div></div>`;
   $('#brandList').innerHTML = P.brands.map((b, i) => {
     const n = P.cards.filter(c => c.origin === b.name).length;
     return `<div class="brow"><span class="ico">${shapeIcon(b.shape, b.color || 'currentColor', 28)}</span>
@@ -1148,6 +1221,8 @@ $('#view-brands').addEventListener('change', e => {
   }
 });
 $('#view-brands').addEventListener('input', e => {
+  const k = e.target.dataset.back;
+  if (k) { P.back[k] = e.target.value; save(); $('#backPrev').innerHTML = backMarkup(0.34, true); return; }
   const i = e.target.dataset.bcolor; if (i == null) return;
   P.brands[+i].color = e.target.value; save();
   e.target.closest('.brow').querySelector('.ico').innerHTML = shapeIcon(P.brands[+i].shape, e.target.value, 28);
@@ -1158,6 +1233,9 @@ $('#view-brands').addEventListener('click', async e => {
   if (b.id === 'addTag') { const n = await promptText('New allegiance', 'Allegiance name (e.g. "Gamers")'); if (n) { if (P.tags.includes(n)) toast('Already exists.', true); else { P.tags.push(n); save(); renderBrands(); } } }
   if (d.bclear) { P.brands[+d.bclear].color = ''; save(); renderBrands(); }
   if (d.blogo) { logoTarget = +d.blogo; $('#logoPick').click(); }
+  if (b.id === 'backLogo') { logoTarget = 'back'; $('#logoPick').click(); }
+  if (b.id === 'backLogoDel') { delete P.back.logo; save(); renderBrands(); }
+  if (b.id === 'backReset') { const logo = P.back.logo; P.back = { ...DEFAULT_BACK, ...(logo ? { logo } : {}) }; save(); renderBrands(); toast('Card back reset'); }
   if (d.blogoDel) { delete P.brands[+d.blogoDel].logo; save(); renderBrands(); toast('Logo removed'); }
   if (d.bdel) {
     const br = P.brands[+d.bdel], n = P.cards.filter(c => c.origin === br.name).length;
@@ -1190,6 +1268,46 @@ async function toPNG(svgStr, w, h) {
   done(); return new Promise(r => cv.toBlob(r, 'image/png'));
 }
 const fileBase = c => String(c.fileName || '').replace(/[^\w\- .]/g, '').trim() || c.id;
+const backMarkup = (scale = 1, display = false) => backSVG(P.setName, scale, P.back, P.back.logo ? (display ? href(P.back.logo) : P.assets[P.back.logo] || '') : '');
+const blobToDataURL = b => new Promise(r => { const f = new FileReader(); f.onload = () => r(f.result); f.readAsDataURL(b); });
+async function toImage(svgStr, w, h, type = 'image/png', q = 0.9) {
+  const { img, done } = await svgImage(svgStr), cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  const g = cv.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, w, h); g.drawImage(img, 0, 0, w, h);
+  await sleep(20); g.drawImage(img, 0, 0, w, h);
+  done(); return new Promise(r => cv.toBlob(r, type, q));
+}
+// One file the playtest table imports with art: DECK → Load a deck → Import deck file.
+const realDecks = () => P.folders.filter(d => !d.sandbox && P.cards.some(c => c.folders.includes(d.id)));
+async function buildPlaytest(decks, step = () => { }) {
+  const data = playtestDeckData(P, decks), ids = new Set(data.cards.map(c => c.id)), cards = P.cards.filter(c => ids.has(c.id));
+  data.images = {};
+  for (let i = 0; i < cards.length; i++) { step(i, cards.length, `Playtest art ${i + 1}/${cards.length}: ${cards[i].name}`); data.images[cards[i].id] = await blobToDataURL(await toImage(exportSVG(cards[i], P.cards.indexOf(cards[i]), 1), W, H, 'image/jpeg', 0.86)); }
+  data.back = await blobToDataURL(await toImage(backMarkup(1), W, H, 'image/jpeg', 0.86));
+  return { data, cards };
+}
+async function playtestFile(decks, label) {
+  decks = decks.filter(d => !d.sandbox && P.cards.some(c => c.folders.includes(d.id)));
+  if (!decks.length) return toast('Put some cards in a deck first. The playtest table loads decks.', true);
+  let data, cards;
+  await withProgress('🕹 Building the playtest file', async step => { ({ data, cards } = await buildPlaytest(decks, step)); });
+  download(new Blob([JSON.stringify(data)], { type: 'application/json' }), `${slug(label || P.setName)}.lftdeck.json`);
+  toast(`🕹 Playtest file ready (${cards.length} cards with art). On the table: DECK → Load a deck → Import deck file.`);
+}
+// Real-size print sheet: 9 poker-size cards (63 × 88 mm) per page with cut lines.
+async function printSheet(cards, label) {
+  if (!cards.length) return toast('No cards to print.', true);
+  const w = window.open('', '_blank'); if (!w) return toast('Your browser blocked the print window. Allow pop-ups for this site and try again.', true);
+  w.document.write('<p style="font:16px Arial;padding:20px">Preparing your cards…</p>');
+  const urls = [];
+  await withProgress('🖨 Preparing the print sheet', async step => {
+    for (let i = 0; i < cards.length; i++) { step(i, cards.length, `Card ${i + 1}/${cards.length}`); urls.push(await blobToDataURL(await toImage(exportSVG(cards[i], P.cards.indexOf(cards[i]), 2), W * 2, H * 2, 'image/jpeg', 0.92))); }
+  });
+  const pages = []; for (let i = 0; i < urls.length; i += 9) pages.push(urls.slice(i, i + 9));
+  w.document.open();
+  w.document.write(`<!doctype html><title>${esc(label)}: print sheet</title><style>@page{size:auto;margin:7mm}body{margin:0;font:13px Arial}.page{display:grid;grid-template-columns:repeat(3,63mm);grid-auto-rows:88mm;justify-content:center;break-after:page}.page:last-child{break-after:auto}.page img{width:63mm;height:88mm;display:block;outline:.2mm dashed #888;outline-offset:-.1mm}.hint{padding:10px;text-align:center;background:#fff3c4}@media print{.hint{display:none}}</style><div class="hint">Print at <b>100% / Actual size</b> on Letter or A4, then cut on the dashed lines. <button onclick="print()">🖨 Print</button></div>${pages.map(p => `<div class="page">${p.map(u => `<img src="${u}" alt="">`).join('')}</div>`).join('')}`);
+  w.document.close();
+  setTimeout(() => { try { w.focus(); w.print(); } catch { } }, 700);
+}
 const cardPNG = (c, scale = 1) => toPNG(exportSVG(c, P.cards.indexOf(c), scale), W * scale, H * scale);
 function cardBundle(c) {
   const assets = {}; for (const l of c.layout.layers) if (l.kind === 'image' && P.assets[l.asset]) assets[l.asset] = P.assets[l.asset];
@@ -1273,7 +1391,7 @@ async function withProgress(title, fn) {
 }
 async function exportZip(cards = P.cards, label = P.setName) {
   if (!cards.length) return toast('No cards to export yet.', true);
-  const opt = { png: $('#xPng').checked, hi: $('#xHi').checked, tts: $('#xTts').checked, data: $('#xData').checked, save: $('#xSave').checked };
+  const opt = { png: $('#xPng').checked, hi: $('#xHi').checked, tts: $('#xTts').checked, data: $('#xData').checked, save: $('#xSave').checked, play: $('#xPlay').checked };
   if (!Object.values(opt).some(Boolean)) return toast('Tick at least one thing to export (Save & Share tab).', true);
   let JSZip;
   try { JSZip = (await lib(JSZIP, 'ZIP export')).default; } catch (e) { return toast(e.message, true); }
@@ -1288,7 +1406,12 @@ async function exportZip(cards = P.cards, label = P.setName) {
       if (opt.data) {
         zip.file('data/cards.json', JSON.stringify(cards.map(toEngine), null, 2) + '\n');
         zip.file('data/cards.csv', toCSV(cards));
+        const gd = gameDecksJson(P); if (Object.keys(gd).length) zip.file('data/decks.json', JSON.stringify(gd, null, 2) + '\n');
         try { zip.file('data/cards.xlsx', await xlsxBlob(cards)); } catch { /* offline: CSV still there */ }
+      }
+      if (opt.play) {
+        const decks = realDecks().filter(d => cards.some(c => c.folders.includes(d.id)));
+        if (decks.length) { const { data } = await buildPlaytest(decks, step); zip.file(`playtest/${base}.lftdeck.json`, JSON.stringify(data)); }
       }
       if (opt.png) for (let i = 0; i < n; i++) {
         step(i, n, `Card ${i + 1}/${n}: ${cards[i].name}`);
@@ -1298,7 +1421,7 @@ async function exportZip(cards = P.cards, label = P.setName) {
       if (opt.tts) {
         // TTS custom decks: up to 10x7 per sheet, last slot holds the hidden-card image.
         const cw = 400, ch = 560, per = 69;
-        zip.file('tts/back.png', await toPNG(backSVG(P.setName, 1), W, H));
+        zip.file('tts/back.png', await toPNG(backMarkup(1), W, H));
         for (let s = 0; s * per < n; s++) {
           const chunk = cards.slice(s * per, s * per + per), cols = Math.min(10, chunk.length + 1), rows = Math.ceil((chunk.length + 1) / cols);
           const cv = document.createElement('canvas'); cv.width = cols * cw; cv.height = rows * ch; const g = cv.getContext('2d');
@@ -1308,7 +1431,7 @@ async function exportZip(cards = P.cards, label = P.setName) {
             const { img, done } = await svgImage(exportSVG(chunk[i], idx(chunk[i]), 1));
             g.drawImage(img, (i % cols) * cw, Math.floor(i / cols) * ch, cw, ch); done();
           }
-          const { img, done } = await svgImage(backSVG(P.setName)); g.drawImage(img, (cols - 1) * cw, (rows - 1) * ch, cw, ch); done();
+          const { img, done } = await svgImage(backMarkup(1)); g.drawImage(img, (cols - 1) * cw, (rows - 1) * ch, cw, ch); done();
           zip.file(`tts/sheet-${s + 1}.png`, await new Promise(r => cv.toBlob(r, 'image/png')));
           ttsNote += `  sheet-${s + 1}.png: Width ${cols}, Height ${rows}, Number ${chunk.length}\n`;
         }
@@ -1327,6 +1450,9 @@ WHAT'S INSIDE
   *.lftset.json   Full save. Drop it (or this whole ZIP) into the Forge to keep editing.
   data/cards.json Game data in the same format as the TTS mod's data/cards.json.
   data/cards.xlsx Same data for Excel / Google Sheets (see the "How to fill" tab).
+  data/decks.json The decks marked 🔴 Red / 🔵 Blue, ready for the scripted TTS mod.
+  playtest/       *.lftdeck.json: every deck with its card art, for the playtest table
+                  (DECK → Load a deck → Import deck file).
   data/cards.csv  Same again as plain CSV. Edit either, drop it back into the Forge:
                   stats and text update, art stays.
   png/            One image per card.
@@ -1338,7 +1464,8 @@ TABLETOP SIMULATOR (quick custom deck)
 ${tts || '  (not exported)\n'}  For online play the images must be uploaded somewhere public (e.g. Steam Cloud).
 
 INTO THE SCRIPTED TTS MOD
-  Merge data/cards.json into the repo's data/cards.json and run npm run build.
+  Merge data/cards.json into the repo's data/cards.json (and data/decks.json, if you marked
+  Red / Blue decks) and run npm run build.
   The scripted engine only runs the effect types this Forge offers.
 `;
 
@@ -1455,6 +1582,8 @@ $('#installBtn').addEventListener('click', async () => { if (!installEvt) return
 $('#dlSave').addEventListener('click', () => { gcAssets(); download(new Blob([JSON.stringify(P)], { type: 'application/json' }), `${slug(P.setName)}-${new Date().toISOString().slice(0, 10)}.lftset.json`); toast('💾 Save file downloaded'); });
 $('#openFile').addEventListener('click', () => $('#filePick').click());
 $('#dlZip').addEventListener('click', () => exportZip());
+$('#dlPlay').addEventListener('click', () => playtestFile(realDecks(), P.setName));
+$('#printAll').addEventListener('click', () => printSheet(P.cards, P.setName));
 $('#dlCsv').addEventListener('click', () => { if (!P.cards.length) return toast('No cards yet.', true); download(new Blob(['﻿' + toCSV(P.cards)], { type: 'text/csv' }), `${slug(P.setName)}-cards.csv`); toast('📊 CSV downloaded'); });
 $('#dlXlsx').addEventListener('click', async () => { if (!P.cards.length) return toast('No cards yet — try the blank template.', true); try { download(await xlsxBlob(P.cards), `${slug(P.setName)}-cards.xlsx`); toast('📊 Excel file downloaded'); } catch (e) { toast(e.message, true); } });
 $('#dlTemplate').addEventListener('click', async () => { try { download(await xlsxBlob([], true), 'card-forge-template.xlsx'); toast('📊 Template downloaded — see the “How to fill” tab'); } catch (e) { toast(e.message, true); } });
@@ -1485,6 +1614,27 @@ function partialProject(cards) {
   return clone({ ...P, cards, folders: P.folders.filter(f => cards.some(c => c.folders.includes(f.id))), assets: Object.fromEntries(Object.entries(P.assets).filter(([k]) => keep.has(k))) });
 }
 const versionList = async () => (await store.get('snaps')) || [];
+// Snapshot images are stored once each ("asset:<id>") and shared between snapshots, instead of
+// being copied into every snapshot. Older snapshots with inline images still load.
+async function putSnap(id, data) {
+  const assets = data.assets || {}, have = new Set((await store.get('assetKeys')) || []);
+  for (const [k, v] of Object.entries(assets)) if (!have.has(k)) { await store.set('asset:' + k, v); have.add(k); }
+  await store.set('assetKeys', [...have]);
+  await store.set('snap:' + id, { ...data, assets: {}, assetIds: Object.keys(assets) });
+  return Object.keys(assets);
+}
+async function getSnap(id) {
+  const d = await store.get('snap:' + id); if (!d?.assetIds) return d;
+  d.assets = {}; for (const k of d.assetIds) { const v = await store.get('asset:' + k); if (v) d.assets[k] = v; }
+  delete d.assetIds; return d;
+}
+async function dropSnap(id) {
+  await store.del('snap:' + id);
+  const list = await versionList(), keep = new Set(list.flatMap(s => s.assetIds || []));
+  const have = (await store.get('assetKeys')) || [];
+  for (const k of have) if (!keep.has(k)) await store.del('asset:' + k);
+  await store.set('assetKeys', have.filter(k => keep.has(k)));
+}
 async function saveVersion(scope = 'set', auto = false) {
   const f = P.folders.find(x => x.id === scope);
   const cards = scope === 'set' ? P.cards : P.cards.filter(c => c.folders.includes(scope));
@@ -1495,10 +1645,11 @@ async function saveVersion(scope = 'set', auto = false) {
   if (!auto) { const named = await promptText(`📸 Snapshot ${f ? '“' + esc(f.name) + '”' : 'the whole set'}`, 'Name it so you’ll recognise it later (e.g. “before nerfs”, “playtest 2”)', label); if (named === null) return; label = named || label; }
   const meta = { id: newId('v'), scope, scopeName: f ? f.name : P.setName, icon: f ? f.icon : '📦', label: label.slice(0, 40), date: Date.now(), count: cards.length, auto };
   try {
-    await store.set('snap:' + meta.id, partialProject(cards));
+    meta.assetIds = await putSnap(meta.id, partialProject(cards));
     list.unshift(meta);
     const autos = list.filter(s => s.auto);
-    for (const old of autos.slice(8)) { list.splice(list.indexOf(old), 1); store.del('snap:' + old.id); }
+    const gone = autos.slice(8); for (const old of gone) list.splice(list.indexOf(old), 1);
+    await store.set('snaps', list); for (const old of gone) await dropSnap(old.id);
     await store.set('snaps', list);
     if (!auto) toast(`📸 Snapshot saved: “${meta.label}” (${meta.count} cards)`);
     if (ui.view === 'share') renderVersions();
@@ -1519,16 +1670,72 @@ $('#pVersions').addEventListener('click', async e => {
     const list = await versionList(); if (!list.length) return toast('No snapshots to archive yet.', true);
     let JSZip; try { JSZip = (await lib(JSZIP, 'Archive')).default; } catch (err) { return toast(err.message, true); }
     const zip = new JSZip();
-    for (const s of list) { const d = await store.get('snap:' + s.id); if (d) zip.file(`${s.auto ? 'auto/' : ''}${vFileName(s)}`, JSON.stringify(d)); }
+    for (const s of list) { const d = await getSnap(s.id); if (d) zip.file(`${s.auto ? 'auto/' : ''}${vFileName(s)}`, JSON.stringify(d)); }
     zip.file('current.lftset.json', JSON.stringify(partialProject(P.cards)));
     download(await zip.generateAsync({ type: 'blob' }), `${slug(P.setName)}-archive-${new Date().toISOString().slice(0, 10)}.zip`);
     return toast('🗄 Archive downloaded — every snapshot in one ZIP');
   }
   const id = b.dataset.id, list = await versionList(), s = list.find(x => x.id === id); if (!s) return;
-  if (b.dataset.v === 'dl') { const d = await store.get('snap:' + id); if (d) download(new Blob([JSON.stringify(d)], { type: 'application/json' }), vFileName(s)); }
-  if (b.dataset.v === 'restore') { const d = await store.get('snap:' + id); if (d) { await saveVersion('set', true); await importProject(d, `${s.scopeName} · ${s.label}`); } }
-  if (b.dataset.v === 'del' && await confirmAsk('Delete snapshot?', `Delete ${esc(s.label)} of “${esc(s.scopeName)}”?`, 'Delete')) { list.splice(list.indexOf(s), 1); await store.set('snaps', list); await store.del('snap:' + id); renderVersions(); }
+  if (b.dataset.v === 'dl') { const d = await getSnap(id); if (d) download(new Blob([JSON.stringify(d)], { type: 'application/json' }), vFileName(s)); }
+  if (b.dataset.v === 'restore') { const d = await getSnap(id); if (d) { await saveVersion('set', true); await importProject(d, `${s.scopeName} · ${s.label}`); } }
+  if (b.dataset.v === 'del' && await confirmAsk('Delete snapshot?', `Delete ${esc(s.label)} of “${esc(s.scopeName)}”?`, 'Delete')) { list.splice(list.indexOf(s), 1); await store.set('snaps', list); await dropSnap(id); renderVersions(); }
 });
+
+// ---------------------------------------------------------------- manual
+function renderManual() {
+  if ($('#manualBody').dataset.ready) return;
+  const row = cells => `<tr>${cells.map(c => `<td>${c}</td>`).join('')}</tr>`;
+  const table = (head, rows) => `<table class="mtable"><thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.map(row).join('')}</tbody></table>`;
+  const sections = [
+    ['start', '🚀 Quick start', `<ol class="steps"><li><b>Make a card</b>: Cards → <b>+ New Character</b> or <b>+ New Action</b>. Stuck? <b>🎲 Roll 5 into the Sandbox</b>.</li>
+      <li><b>Edit it</b>: tap any text on the card (name, cost, HP, banner, rules) and type. The panel on the side has everything else.</li>
+      <li><b>Put it in a deck</b>: drag it onto a deck (on touch, hold it first). 20 different cards = tournament-legal ✓.</li>
+      <li><b>Share or test it</b>: <b>🕹 Send to playtest</b>, <b>🖨 Print</b>, or Save &amp; Share → <b>Download ZIP</b>.</li></ol>
+      <p>Everything saves automatically in this browser. Take a <b>📸 Snapshot</b> or <b>Download save file</b> before big changes.</p>`],
+    ['card', '🃏 Anatomy of a card', `<div class="manual-card">${cardSVG(M_SAMPLE(), { project: P, uid: 'man' })}<ol>
+      <li><b>Type line</b>: CHA (Character), ACT (Action), or EDGELORD SUMMON for EXE cards.</li><li><b>Name</b> and <b>cost</b> in SP (0–10).</li>
+      <li><b>Brand</b> (Origin): where a character comes from. Its logo can sit next to it.</li><li><b>Art window</b>: your art, clipped to this box.</li>
+      <li><b>Banner</b>: the ability's trigger words (HEY, I'M HERE! / NAP TIEM! / BIG STINK!).</li><li><b>Rules text</b>, written for you from the ability, plus optional flavor.</li>
+      <li><b>Partners</b>: who can Backup this card. <b>HP</b> for characters.</li></ol></div>`],
+    ['types', '🥊 Card types &amp; ability categories', table(['Filter', 'Means'], [['🃏 All', 'Every card'], ['🥊 CHA', 'Characters: stay in the ring, have HP'], ['😈 EXE', 'Edgelord summons: high-tier characters, holographic foil'], ['⚡ ACT', 'Actions: resolve once, then discard']]) +
+      table(['Category', 'When it happens'], Object.values(TRIGGERS).map(t => [`${t.icon} ${t.short}`, esc(t.label)]))],
+    ['abilities', '✨ Abilities', `<p>Pick a trigger, an effect, a target and an amount, or type it in plain English in the <b>Ability</b> tab (or straight onto the card) and the Forge maps it for you. If nothing matches, your idea is saved to the card's notes for the team.</p>` +
+      table(['Effect', 'Can target'], Object.entries(EFFECTS).map(([k, e]) => [esc(e.label), e.targets.map(t => esc(TARGET_LABELS[t])).join(', ')])) +
+      table(['Passive trait', ''], Object.entries(PASSIVES).filter(([k]) => k).map(([, v]) => [esc(v), ''])) +
+      `<p class="muted small">These are exactly the effects the game engine runs today (checked automatically on every release).</p>`],
+    ['brands', '🏷 Brands, allegiances &amp; Backups', `<p><b>Brands</b> (Origins) group characters; same-brand characters can Backup each other (except Unassigned). <b>Allegiances</b> are tags like Pets or Snacks. A card's <b>Partners</b> list which allegiances can attach to it as a Backup. The <b>Brand</b> tab in the editor shows who can Backup whom. Brand logos must be a PNG with a transparent background, or an SVG.</p>`],
+    ['decks', '📚 Decks, Sandbox &amp; Trash', `<ul><li>A card can be in several decks. Each deck shows <b>x/20</b> and turns ✓ at 20 cards with different names.</li>
+      <li>Drag cards onto a deck in the sidebar, onto a deck stack, or onto the tray that slides up while dragging. Dropping asks <b>Add</b> (same card, both places), <b>Move</b> (out of the deck you're in) or <b>Duplicate</b> (independent copy).</li>
+      <li>Pick up many: on touch, hold a card and let go to select, then tap more (or tap cards with a second finger mid-drag). On PC, Ctrl/⌘-click, Shift-click, or drag a box.</li>
+      <li>Open a deck to see its <b>cost curve</b> and <b>brand mix</b>, and to mark it as the <b>🔴 Red</b> or <b>🔵 Blue</b> deck for the TTS game.</li>
+      <li><b>🧪 Sandbox</b>: a scratch deck for random experiments. It never counts toward a deck.</li>
+      <li><b>🗑 Trash</b>: deleted cards wait ${TRASH_DAYS} days. Most library actions also show <b>↶ Undo</b> for a few seconds.</li></ul>`],
+    ['art', '🎨 Art &amp; design', `<ul><li><b>🖼 Image</b>, <b>T Text</b>, <b>⭐ Sticker</b>, <b>🏷 Logo</b> add layers. Drag to move, white corners resize, yellow dot spins; pinch on touch, scroll wheel on PC.</li>
+      <li>Selected images get <b>⤢ Fill art</b>, <b>⊡ Fit art</b>, <b>✛ Center</b>, shape <b>masks</b>, and <b>☀ Bright / ◐ Contrast / 🎨 Color</b> sliders.</li>
+      <li><b>Design</b> tab: style presets, colors, gradients, fonts, holographic foil (automatic for EXE). The rules check warns when text gets hard to read.</li>
+      <li><b>Brands</b> tab → Set Info: the set name printed on every card and the <b>card back</b> design.</li>
+      <li>Workspace buttons (top of the editor): swap sides, change the backdrop, focus mode; drag the panel edge to resize it on PC.</li></ul>`],
+    ['share', '📦 Saving, sharing &amp; testing', table(['Want to…', 'Use', 'You get'], [
+      ['Hand one card to someone', 'Editor → <b>Share card</b>', 'A PNG with the card data hidden inside; drop it into any Forge'],
+      ['Move your whole set / back up', 'Save &amp; Share → <b>Download save file</b>', '<code>.lftset.json</code>; open it anywhere to merge or replace'],
+      ['Playtest online', 'Open a deck → <b>🕹 Send to playtest</b>', '<code>.lftdeck.json</code> with card art; on the table: DECK → Load a deck → Import deck file'],
+      ['Playtest on paper', '<b>🖨 Print</b> (deck, selection, or all)', '9 real-size cards per page with cut lines'],
+      ['Tabletop Simulator', 'Save &amp; Share → <b>Download ZIP</b>', 'Deck sheet + back for a custom deck, and <code>data/cards.json</code> / <code>decks.json</code> for the scripted mod'],
+      ['Work in a spreadsheet', 'Save &amp; Share → Spreadsheet', 'Excel template or CSV; drop it back in, stats update and art stays; or link a Google Sheet'],
+      ['Undo a big mistake', 'Save &amp; Share → <b>📸 Snapshots</b>', 'Roll back to any snapshot; the Forge also keeps automatic and pre-update backups'],
+    ])],
+    ['keys', '⌨ Shortcuts', table(['Keys', 'Does'], [['Ctrl/⌘ + Z · Ctrl/⌘ + Y', 'Undo · redo (editor)'], ['Arrow keys (+Shift)', 'Nudge the selected layer 1 (10) px'], ['Delete / Backspace', 'Delete the selected layer'], ['Ctrl/⌘ + D', 'Duplicate the selected layer'], ['Esc', 'Deselect / close help'], ['Ctrl/⌘ + scroll', 'Zoom the card grid'], ['Ctrl/⌘-click · Shift-click', 'Pick cards · pick a range']])],
+    ['faq', '❓ Questions', `<dl><dt>Where are my cards stored?</dt><dd>In this browser on this device. Other devices and browsers don't see them until you open a save file there.</dd>
+      <dt>The page says a new version is out.</dt><dd>Press <b>Reload now</b>. Your work is saved, and a backup is taken before any upgrade.</dd>
+      <dt>It says the Forge is open in another tab.</dt><dd>Use one tab at a time; a tab that falls behind stops saving so it can't overwrite newer work.</dd>
+      <dt>My art doesn't show on the playtest table.</dt><dd>Use <b>🕹 Send to playtest</b>. A plain save file carries designs, not finished pictures.</dd></dl>`],
+  ];
+  $('#manualBody').innerHTML = `<nav class="mtoc">${sections.map(([id, t]) => `<a href="#m-${id}">${t}</a>`).join('')}</nav>` +
+    sections.map(([id, t, body]) => `<section class="msec" id="m-${id}"><h2>${t}</h2>${body}</section>`).join('');
+  $('#manualBody').dataset.ready = '1';
+}
+const M_SAMPLE = () => normalize({ id: 'sample', name: 'Unassuming Monkey', type: 'CHA', tier: 'low', cost: 1, hp: 3, origin: 'PawSpace', tags: ['Monkeys'], partners: ['Monkeys'], timing: 'entry', effect: { kind: 'draw', amount: 1, target: 'selfPlayer' }, flavor: 'Suspiciously calm.', layout: defaultLayout() });
+$('#manualBody').addEventListener('click', e => { const a = e.target.closest('.mtoc a'); if (!a) return; e.preventDefault(); $(a.getAttribute('href'))?.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
 
 // ---------------------------------------------------------------- help overlay
 const HELP = {
@@ -1552,6 +1759,9 @@ const HELP = {
     ['#setInfo', 'Your set', 'The set name is printed at the bottom of every card.'],
     ['#brandList', 'Brands', 'Where characters come from. Same-brand characters can Backup each other.'],
     ['#tagList', 'Allegiances', 'Groups like Pets or Snacks. A card’s Partners decide who can Backup it.'],
+  ] },
+  manual: { title: 'The manual', flow: 0, steps: [
+    ['.mtoc', 'Jump to a topic', 'Everything the Forge does, in one place. Tap a topic to jump there.'],
   ] },
   share: { title: 'Saving & sharing', flow: 2, steps: [
     ['#pSave', 'Your save', 'Autosaves in this browser. Download a save file to switch devices or hand work to a teammate.'],
@@ -1649,6 +1859,19 @@ $('#grid').addEventListener('click', e => {
   if (act === 'clearFilters') { Object.assign(ui.f, { q: '', type: 'all', tier: 'all', brand: 'all', tag: 'all', trig: 'all' }); $('#q').value = ''; $('#fTrig').value = 'all'; $('#fTier').value = 'all'; return renderLibrary(); }
   if (act === 'loadBase') return loadBase();
   if (act === 'openHelp') return openHelp();
+  const tr = e.target.closest('[data-trash-restore]'); if (tr) return restoreFromTrash([+tr.dataset.trashRestore]);
+  const td = e.target.closest('[data-trash-del]');
+  if (td) { const t = P.trash[+td.dataset.trashDel]; if (t) { P.trash.splice(+td.dataset.trashDel, 1); save(); renderLibrary(); toast(`“${t.card.name}” deleted for good.`); } return; }
+  const gd = e.target.closest('[data-game]');
+  if (gd) {
+    const fo = P.folders.find(x => x.id === ui.folder), side = gd.dataset.game; if (!fo) return;
+    const before = libState();
+    for (const k of ['Red', 'Blue']) if (P.gameDecks[k] === fo.id) P.gameDecks[k] = '';
+    if (side) P.gameDecks[side] = fo.id;
+    save(); renderLibrary();
+    const s = deckStatus(fo.id);
+    return undoable(side ? `${side === 'Red' ? '🔴' : '🔵'} “${fo.name}” is the ${side} deck${s.legal ? '' : ` (not legal yet: ${s.note})`}.` : `“${fo.name}” is no longer a game deck.`, before);
+  }
   if (act === 'roll5') return rollSandbox(5);
   if (act === 'hideTip') { lsSet('forge-tip-sandbox', '1'); return renderLibrary(); }
   const ef = e.target.closest('[data-edit-folder]'); if (ef) return editFolder(ef.dataset.editFolder);
@@ -1731,10 +1954,44 @@ function whatsNew() {
 }
 $('#appFoot').addEventListener('click', e => { if (e.target.closest('#whatsNew')) whatsNew(); });
 
+// ---------------------------------------------------------------- banners: new version, other tab
+function showBanner(msg, label, fn) {
+  const b = $('#banner'); b.hidden = false;
+  b.innerHTML = `<span>${msg}</span><button class="btn small primary" id="bannerBtn">${label}</button><button class="link small" id="bannerX">dismiss</button>`;
+  $('#bannerBtn').onclick = fn; $('#bannerX').onclick = () => { b.hidden = true; };
+}
+async function checkForUpdate() {
+  if (location.protocol !== 'https:') return;
+  try {
+    const v = (await (await fetch('version.js', { cache: 'no-store' })).text()).match(/VERSION = '([^']+)'/)?.[1];
+    if (v && v !== VERSION) showBanner(`✨ A new version of the Card Forge (v${esc(v)}) is out. Your work is saved.`, 'Reload now', () => location.reload());
+  } catch { }
+}
+bc?.addEventListener('message', e => {
+  const m = e.data || {}; if (m.tab === TAB) return;
+  if (m.type === 'hello') bc.postMessage({ type: 'here', tab: TAB });
+  if (m.type === 'here') showBanner('The Card Forge is also open in another tab. Work in one tab at a time so they don’t overwrite each other.', 'OK', () => { $('#banner').hidden = true; });
+  if (m.type === 'saved' && !staleTab) { staleTab = true; showBanner('You changed your cards in another tab. This tab has stopped saving so it can’t overwrite that work.', 'Reload to continue', () => location.reload()); }
+});
+async function backupBeforeUpgrade(raw) {
+  try {
+    const list = await versionList(), from = raw.forgeVersion || 'an older version';
+    const meta = { id: newId('v'), scope: 'set', scopeName: String(raw.setName || 'My Card Set'), icon: '🛟', label: `Before update to v${VERSION} (from ${from})`, date: Date.now(), count: raw.cards.length, auto: false, safety: true };
+    meta.assetIds = await putSnap(meta.id, raw); list.unshift(meta);
+    const gone = list.filter(s => s.safety).slice(3); for (const old of gone) list.splice(list.indexOf(old), 1);
+    await store.set('snaps', list); for (const old of gone) await dropSnap(old.id);
+  } catch (e) { console.warn('pre-update backup failed', e); }
+}
+
 // ---------------------------------------------------------------- boot
 (async () => {
+  thumbStore = (await store.get('thumbs')) || {};
   const saved = await store.get('project');
+  // A save written by an older Forge is copied to a snapshot BEFORE it is upgraded, so an update can never lose it.
+  if (saved?.cards?.length && saved.forgeVersion !== VERSION) await backupBeforeUpgrade(structuredClone(saved));
+  const wasOlder = saved && saved.forgeVersion !== VERSION;
   P = saved ? upgrade(saved) : emptyProject();
+  if (wasOlder) save(); // store the upgraded save once, so the backup above isn't repeated on every load
   $('#status').textContent = saved ? '✓ loaded your save' : '✓ ready';
   if (!saved) save();
   store.persist();
@@ -1748,4 +2005,7 @@ $('#appFoot').addEventListener('click', e => { if (e.target.closest('#whatsNew')
   if (saved && P.cards.length) { const last = (await versionList()).find(s => s.auto); if (!last || Date.now() - last.date > 6 * 3600e3) saveVersion('set', true); }
   if (P.sheet.auto && P.sheet.url && navigator.onLine) pullSheet(true);
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => { });
+  bc?.postMessage({ type: 'hello', tab: TAB });
+  setInterval(checkForUpdate, 10 * 60e3);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) checkForUpdate(); });
 })();

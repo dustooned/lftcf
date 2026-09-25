@@ -92,7 +92,12 @@ function maskShape(L) {
 function layerBody(L, href, uid, c, project) {
   const fillId = `lf-${uid}-${L.id}`, fillDef = L.fill2 ? `<defs>${gradient(fillId, L.kind === 'text' ? (L.color || '#171724') : (L.fill || '#ffda52'), L.fill2, 90)}</defs>` : '';
   if (L.kind === 'image') {
-    const img = `<image href="${esc(href(L.asset))}" x="${-L.w / 2}" y="${-L.h / 2}" width="${L.w}" height="${L.h}" preserveAspectRatio="none"/>`;
+    // Brightness / contrast / colour: one SVG filter, so exports match the editor exactly.
+    const b = L.bright ?? 1, k = L.contrast ?? 1, s = L.sat ?? 1, fx = `fx-${uid}-${L.id}`;
+    const tuned = b !== 1 || k !== 1 || s !== 1;
+    const fn = ch => `<feFunc${ch} type="linear" slope="${(k * b).toFixed(3)}" intercept="${((0.5 - 0.5 * k) * b).toFixed(3)}"/>`;
+    const filter = tuned ? `<defs><filter id="${fx}" color-interpolation-filters="sRGB"><feColorMatrix type="saturate" values="${s}"/><feComponentTransfer>${fn('R')}${fn('G')}${fn('B')}</feComponentTransfer></filter></defs>` : '';
+    const img = `${filter}<image href="${esc(href(L.asset))}" x="${-L.w / 2}" y="${-L.h / 2}" width="${L.w}" height="${L.h}" preserveAspectRatio="none"${tuned ? ` filter="url(#${fx})"` : ''}/>`;
     if (!L.mask || L.mask === 'none' || !MASKS[L.mask]) return img;
     const id = `mk-${uid}-${L.id}`;
     return `<defs><clipPath id="${id}">${maskShape(L)}</clipPath></defs><g clip-path="url(#${id})">${img}</g>`;
@@ -219,9 +224,12 @@ export function cardSVG(c, ctx, scale = 1) {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W * scale}" height="${H * scale}" viewBox="0 0 ${W} ${H}">${cardInner(c, ctx)}</svg>`;
 }
 
-export function backSVG(setName = 'LOL, FIGHT TIEM!', scale = 1) {
-  const t = (s, x, y, size, color, weight) => `<text x="${x}" y="${y}" text-anchor="middle" font-family="Arial, sans-serif" font-weight="${weight}" font-size="${size}" fill="${color}">${esc(s)}</text>`;
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W * scale}" height="${H * scale}" viewBox="0 0 ${W} ${H}"><rect width="500" height="700" fill="#171724"/><rect x="22" y="22" width="456" height="656" rx="24" fill="none" stroke="#aff57e" stroke-width="8"/><path d="M40 140L450 560M450 140L40 560" stroke="#ff9ba7" stroke-width="24"/>${t('LOL,', 250, 280, 84, '#fff9eb', 900)}${t('FIGHT', 250, 375, 84, '#fff9eb', 900)}${t('TIEM!', 250, 470, 84, '#aff57e', 900)}${t(setName, 250, 610, 27, '#fff9eb', 600)}${t('Hmm, Hmm! Games', 250, 650, 20, '#fff9eb', 500)}</svg>`;
+// Card back. `back` = { bg, frame, stripe, ink, tagline } from the set; `logo` = image URL or ''.
+export function backSVG(setName = 'LOL, FIGHT TIEM!', scale = 1, back = {}, logo = '') {
+  const bg = back.bg || '#171724', frame = back.frame || '#aff57e', stripe = back.stripe || '#ff9ba7', ink = back.ink || '#fff9eb';
+  const t = (s, x, y, size, color, weight) => `<text x="${x}" y="${y}" text-anchor="middle" font-family="Arial, sans-serif" font-weight="${weight}" font-size="${size}" fill="${esc(color)}">${esc(s)}</text>`;
+  const mark = logo ? `<circle cx="250" cy="150" r="78" fill="${esc(bg)}" stroke="${esc(frame)}" stroke-width="6"/><image href="${esc(logo)}" x="186" y="86" width="128" height="128" preserveAspectRatio="xMidYMid meet"/>` : '';
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W * scale}" height="${H * scale}" viewBox="0 0 ${W} ${H}"><rect width="500" height="700" fill="${esc(bg)}"/><rect x="22" y="22" width="456" height="656" rx="24" fill="none" stroke="${esc(frame)}" stroke-width="8"/><path d="M40 140L450 560M450 140L40 560" stroke="${esc(stripe)}" stroke-width="24"/>${mark}${t('LOL,', 250, 280 + (logo ? 20 : 0), 84, ink, 900)}${t('FIGHT', 250, 375 + (logo ? 20 : 0), 84, ink, 900)}${t('TIEM!', 250, 470 + (logo ? 20 : 0), 84, frame, 900)}${t(setName, 250, 610, 27, ink, 600)}${t(back.tagline ?? 'Hmm, Hmm! Games', 250, 650, 20, ink, 500)}</svg>`;
 }
 
 export function shapeIcon(name, fill = 'currentColor', size = 28) {

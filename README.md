@@ -14,6 +14,9 @@ A card maker for **LOL, FIGHT TIEM!** by Hmm, Hmm! Games. It runs in the browser
   - **Export ZIP:** images, the Tabletop Simulator deck sheet, the game data and a spreadsheet.
 - Spreadsheet fans: download the Excel template from **Save & Share**, fill it in, and drop it back onto the page.
 - The release name, version and build are shown at the bottom of the page (tap **What’s new** for the changelog). Include them when you report a bug.
+- Testing on the playtest table? Open a deck and press **🕹 Send to playtest**, then on the table: DECK → Load a deck → Import deck file. Cards arrive with their art.
+- Testing on paper? **🖨 Print** makes real-size sheets with cut lines.
+- Deleted something by accident? Look in **🗑 Trash** (kept 30 days), or press **↶ Undo** on the message that pops up. The **📖 Manual** tab explains every tool.
 - Stuck for ideas? **🎲 Roll 5 into the Sandbox**, keep the fun ones by dragging them into a deck, then clear the rest.
 
 ## For maintainers

@@ -23,6 +23,7 @@
     <button data-view="editor">&#9998; Editor</button>
     <button data-view="brands">&#127991; Brands</button>
     <button data-view="share">&#128230; Save &amp; Share</button>
+    <button data-view="manual">&#128214; Manual</button>
   </nav>
   <div class="top-right">
     <span id="status" class="status" aria-live="polite">loading&hellip;</span>
@@ -30,6 +31,7 @@
   </div>
 </header>
 
+<div id="banner" class="banner" role="status" hidden></div>
 <div id="phoneHint" class="phone-hint" hidden>
   <span>&#128241; Works on phones. Editing is comfiest on a <b>PC or tablet</b>.</span>
   <button class="link" id="phoneHintClose">got it</button>
@@ -42,6 +44,7 @@
       <aside class="folders" id="folders" aria-label="Decks"></aside>
       <div class="lib-main">
         <div class="panel-h"><span id="libTitle">&#128193; All cards</span><span id="libCount" class="muted-h"></span></div>
+        <div id="libTools">
         <button class="btn filter-toggle" id="filterToggle" aria-expanded="false" aria-controls="filters">&#128269; Search &amp; filter</button>
         <div class="filters" id="filters">
           <input id="q" type="search" placeholder="Search cards&hellip;" aria-label="Search cards">
@@ -62,6 +65,7 @@
           <span class="spacer"></span>
           <span class="zoom" title="Card size"><button class="icon-btn" id="zoomOut" title="Smaller cards" aria-label="Smaller cards">&#128269;&#8722;</button><input type="range" id="zoom" min="90" max="320" step="2" aria-label="Card size"><button class="icon-btn" id="zoomIn" title="Bigger cards" aria-label="Bigger cards">&#128269;+</button></span>
           <button class="btn" id="selectBtn" aria-pressed="false">&#9745; Select</button>
+        </div>
         </div>
         <div class="selbar" id="selbar" hidden></div>
         <div id="grid" class="grid"></div>
@@ -173,10 +177,13 @@
           <label><input type="checkbox" id="xTts" checked> Tabletop Simulator deck sheet + back</label>
           <label><input type="checkbox" id="xData" checked> Game data: <code>cards.json</code>, <code>.csv</code>, <code>.xlsx</code></label>
           <label><input type="checkbox" id="xSave" checked> Save file (re-open everything later)</label>
+          <label><input type="checkbox" id="xPlay" checked> Playtest table file (every deck, with card art)</label>
         </div>
         <div class="btnrow">
           <button class="btn primary" id="dlZip">&#11015; Download ZIP</button>
           <button class="btn" id="copyJson">&#128203; Copy cards.json</button>
+          <button class="btn" id="dlPlay">&#128377; Playtest file (all decks)</button>
+          <button class="btn" id="printAll">&#128424; Print all cards</button>
         </div>
         <p class="muted small">Want just one deck? Open it in the Cards tab and use <b>Export deck</b>.</p>
       </div>
@@ -208,6 +215,10 @@
       </div>
     </div>
   </section>
+  <!-- MANUAL -->
+  <section id="view-manual" class="view manual">
+    <div class="panel"><div class="panel-h">&#128214; Card Forge manual</div><div class="manual-body" id="manualBody"></div></div>
+  </section>
 </main>
 <footer class="app-foot" id="appFoot"></footer>
 
@@ -216,6 +227,7 @@
   <button data-view="editor"><span>&#9998;</span>Editor</button>
   <button data-view="brands"><span>&#127991;</span>Brands</button>
   <button data-view="share"><span>&#128230;</span>Share</button>
+  <button data-view="manual"><span>&#128214;</span>Manual</button>
 </nav>
 
 <button id="helpFab" class="help-fab" aria-label="How this works" aria-expanded="false" aria-controls="help" title="How this works"><span>?</span></button>
