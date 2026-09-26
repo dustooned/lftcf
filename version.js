@@ -2,12 +2,15 @@
 // can say which build they're on and anyone can find it again (the lftcf repo tags each one).
 // Bump SAVE_FORMAT only when the saved data shape changes in a way older Forges can't read,
 // and add a migration in upgrade().
-export const VERSION = '0.7.0';
+export const VERSION = '0.7.1';
 export const CODENAME = 'Table Ready';
 export const RELEASED = '2026-09-25';
 export const SAVE_FORMAT = 1;
 
 export const CHANGELOG = [
+  { v: '0.7.1', name: 'Table Ready', date: '2026-09-25', notes: [
+    'Fixed the default card back: the big pink X is now a subtle diagonal stripe.',
+  ] },
   { v: '0.7.0', name: 'Table Ready', date: '2026-09-25', notes: [
     '🕹 Send to playtest: one file with a deck and its finished card art for the playtest table (DECK → Load a deck → Import deck file).',
     '🖨 Print sheets: 9 real-size cards per page with cut lines, for a deck, a selection or everything.',
