@@ -69,6 +69,10 @@ const brandOf = (c, project) => c.type === 'CHA' ? project?.brands?.find(b => b.
 // Edgelord (EXE) cards get the holographic finish unless the designer turns it off.
 export const isHolo = c => c.layout?.holo === 'on' || ((c.layout?.holo ?? 'auto') === 'auto' && c.type === 'CHA' && !!c.edgelord);
 export const MASKS = { none: 'No mask', circle: 'Circle', rounded: 'Rounded', hexagon: 'Hexagon', star5: 'Star', heart: 'Heart', diamond: 'Diamond' };
+// Layer blend modes (CSS mix-blend-mode, which SVG-to-PNG export honours too) and layer effects.
+export const BLENDS = { normal: 'Normal', multiply: 'Multiply', screen: 'Screen', overlay: 'Overlay', 'soft-light': 'Soft light', 'hard-light': 'Hard light', darken: 'Darken', lighten: 'Lighten', 'color-dodge': 'Color dodge', 'color-burn': 'Color burn', difference: 'Difference', hue: 'Hue', color: 'Color', luminosity: 'Luminosity' };
+export const LAYER_FX = { none: 'No effect', shadow: 'Drop shadow', glow: 'Glow', outline: 'Sticker outline' };
+export const FX_COLOR = { shadow: '#000000', glow: '#ffda52', outline: '#ffffff' };
 
 const gradient = (id, a, b, angle = 90) => `<linearGradient id="${id}" gradientTransform="rotate(${+angle || 0} .5 .5)"><stop offset="0" stop-color="${esc(a)}"/><stop offset="1" stop-color="${esc(b)}"/></linearGradient>`;
 const HOLO_STOPS = ['#ff9ba7', '#ffda52', '#aff57e', '#89e4d7', '#89d6ff', '#ceacff', '#ff9ba7'];
@@ -93,10 +97,10 @@ function layerBody(L, href, uid, c, project) {
   const fillId = `lf-${uid}-${L.id}`, fillDef = L.fill2 ? `<defs>${gradient(fillId, L.kind === 'text' ? (L.color || '#171724') : (L.fill || '#ffda52'), L.fill2, 90)}</defs>` : '';
   if (L.kind === 'image') {
     // Brightness / contrast / colour: one SVG filter, so exports match the editor exactly.
-    const b = L.bright ?? 1, k = L.contrast ?? 1, s = L.sat ?? 1, fx = `fx-${uid}-${L.id}`;
-    const tuned = b !== 1 || k !== 1 || s !== 1;
+    const b = L.bright ?? 1, k = L.contrast ?? 1, s = L.sat ?? 1, hue = L.hue || 0, fx = `fx-${uid}-${L.id}`;
+    const tuned = b !== 1 || k !== 1 || s !== 1 || hue !== 0;
     const fn = ch => `<feFunc${ch} type="linear" slope="${(k * b).toFixed(3)}" intercept="${((0.5 - 0.5 * k) * b).toFixed(3)}"/>`;
-    const filter = tuned ? `<defs><filter id="${fx}" color-interpolation-filters="sRGB"><feColorMatrix type="saturate" values="${s}"/><feComponentTransfer>${fn('R')}${fn('G')}${fn('B')}</feComponentTransfer></filter></defs>` : '';
+    const filter = tuned ? `<defs><filter id="${fx}" color-interpolation-filters="sRGB"><feColorMatrix type="saturate" values="${s}"/>${hue ? `<feColorMatrix type="hueRotate" values="${+hue}"/>` : ''}<feComponentTransfer>${fn('R')}${fn('G')}${fn('B')}</feComponentTransfer></filter></defs>` : '';
     const img = `${filter}<image href="${esc(href(L.asset))}" x="${-L.w / 2}" y="${-L.h / 2}" width="${L.w}" height="${L.h}" preserveAspectRatio="none"${tuned ? ` filter="url(#${fx})"` : ''}/>`;
     if (!L.mask || L.mask === 'none' || !MASKS[L.mask]) return img;
     const id = `mk-${uid}-${L.id}`;
@@ -113,21 +117,39 @@ function layerBody(L, href, uid, c, project) {
   const fill = L.fill2 ? `url(#${fillId})` : (L.color || '#171724');
   return fillDef + lines.map((l, i) => `<text x="0" y="${(y0 + i * step).toFixed(1)}" text-anchor="middle" font-family="${fam(L.font)}" font-weight="${L.bold === false ? 500 : 800}" font-size="${L.size}" fill="${esc(fill)}"${outline}>${esc(l)}</text>`).join('');
 }
+// Shadow / glow / outline, in card units so they don't grow when the layer is scaled up.
+function fxFilter(L, id) {
+  const col = esc(/^#[0-9a-f]{6}$/i.test(L.fxColor || '') ? L.fxColor : FX_COLOR[L.fx]), k = +(L.fxSize ?? 1) || 1;
+  const open = `<filter id="${id}" filterUnits="userSpaceOnUse" x="-80" y="-80" width="660" height="860" color-interpolation-filters="sRGB">`;
+  if (L.fx === 'shadow') return `${open}<feDropShadow dx="${(4 * k).toFixed(1)}" dy="${(7 * k).toFixed(1)}" stdDeviation="${(5 * k).toFixed(1)}" flood-color="${col}" flood-opacity=".6"/></filter>`;
+  if (L.fx === 'glow') return `${open}<feMorphology in="SourceAlpha" operator="dilate" radius="${(2 * k).toFixed(1)}"/><feGaussianBlur stdDeviation="${(7 * k).toFixed(1)}" result="b"/><feFlood flood-color="${col}"/><feComposite in2="b" operator="in" result="g"/><feMerge><feMergeNode in="g"/><feMergeNode in="g"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`;
+  if (L.fx === 'outline') return `${open}<feMorphology in="SourceAlpha" operator="dilate" radius="${(5 * k).toFixed(1)}" result="d"/><feFlood flood-color="${col}"/><feComposite in2="d" operator="in" result="o"/><feMerge><feMergeNode in="o"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`;
+  return '';
+}
+// Each layer gets its own wrapper that carries the clip, effect and blend mode. The wrapper
+// sits straight on the card (no isolated group in between), so Multiply/Screen/etc. blend
+// with the real card underneath, in the editor and in exported PNGs alike.
 function layerMarkup(L, ctx, c, ghost) {
   if (L.hidden) return '';
   const uid = (ctx.uid || 'c') + (ghost ? 'g' : '');
-  return `<g ${ghost ? 'data-ghost' : 'data-layer'}="${L.id}" transform="${layerTransform(L)}" opacity="${ghost ? 0.28 : (L.opacity ?? 1)}"${ghost ? ' pointer-events="none"' : ' class="layer"'}>${layerBody(L, ctx.href || (() => ''), uid, c, ctx.project)}</g>`;
+  const inner = `<g ${ghost ? 'data-ghost' : 'data-layer'}="${L.id}" transform="${layerTransform(L)}" opacity="${ghost ? 0.28 : (L.opacity ?? 1)}"${ghost ? ' pointer-events="none"' : ' class="layer"'}>${layerBody(L, ctx.href || (() => ''), uid, c, ctx.project)}</g>`;
+  if (ghost) return inner;
+  const fid = `lx-${uid}-${L.id}`, filter = LAYER_FX[L.fx] && L.fx !== 'none' ? fxFilter(L, fid) : '';
+  const blend = BLENDS[L.blend] && L.blend !== 'normal' ? ` style="mix-blend-mode:${L.blend}"` : '';
+  return `${filter ? `<defs>${filter}</defs>` : ''}<g data-wrap="${L.id}" clip-path="url(#${L.zone === 'top' ? 'card' : 'art'}-${uid})"${filter ? ` filter="url(#${fid})"` : ''}${blend}${L.locked ? ' pointer-events="none"' : ''}>${inner}</g>`;
 }
 
-export function handlesMarkup(L) {
+// k = 1 / canvas zoom, so handles stay finger-sized however far the canvas is zoomed in.
+export function handlesMarkup(L, k = 1) {
   if (!L || L.hidden) return '';
   const { hw, hh } = layerBox(L), s = L.scale, r = (L.rot || 0) * Math.PI / 180, cos = Math.cos(r), sin = Math.sin(r);
   const P = (lx, ly) => [L.x + lx * cos - ly * sin, L.y + lx * sin + ly * cos];
   const corners = [[-hw * s, -hh * s], [hw * s, -hh * s], [hw * s, hh * s], [-hw * s, hh * s]].map(p => P(...p));
-  const top = P(0, -hh * s), rot = P(0, -hh * s - 46);
-  const dot = (p, kind, fill) => `<circle data-handle="${kind}" cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="28" fill="transparent"/><circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="12" fill="${fill}" stroke="#171724" stroke-width="3" pointer-events="none"/>`;
-  return `<polygon points="${corners.map(p => p.map(v => v.toFixed(1)).join(',')).join(' ')}" fill="none" stroke="#2f5bd3" stroke-width="3" stroke-dasharray="10 6" pointer-events="none"/>
-  <line x1="${top[0].toFixed(1)}" y1="${top[1].toFixed(1)}" x2="${rot[0].toFixed(1)}" y2="${rot[1].toFixed(1)}" stroke="#2f5bd3" stroke-width="3" pointer-events="none"/>
+  const box = `<polygon points="${corners.map(p => p.map(v => v.toFixed(1)).join(',')).join(' ')}" fill="none" stroke="${L.locked ? '#8a8fa8' : '#2f7bff'}" stroke-width="${(2.5 * k).toFixed(2)}" stroke-dasharray="${L.locked ? `${6 * k} ${5 * k}` : 'none'}" pointer-events="none"/>`;
+  if (L.locked) return box;
+  const top = P(0, -hh * s), rot = [top[0] + 46 * k * sin, top[1] - 46 * k * cos];
+  const dot = (p, kind, fill) => `<circle data-handle="${kind}" cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${(28 * k).toFixed(1)}" fill="transparent"/><circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${(10 * k).toFixed(1)}" fill="${fill}" stroke="#2f7bff" stroke-width="${(2.5 * k).toFixed(2)}" pointer-events="none"/>`;
+  return `${box}<line x1="${top[0].toFixed(1)}" y1="${top[1].toFixed(1)}" x2="${rot[0].toFixed(1)}" y2="${rot[1].toFixed(1)}" stroke="#2f7bff" stroke-width="${(2.5 * k).toFixed(2)}" pointer-events="none"/>
   ${corners.map(p => dot(p, 'scale', '#ffffff')).join('')}${dot(rot, 'rotate', '#ffda52')}`;
 }
 
@@ -204,7 +226,7 @@ export function cardInner(c, ctx) {
   ${placeholder}
   </g>
   ${selL ? layerMarkup(selL, ctx, c, true) : ''}
-  <g clip-path="url(#art-${uid})">${artLayers.map(l => layerMarkup(l, ctx, c)).join('')}</g>
+  ${artLayers.map(l => layerMarkup(l, ctx, c)).join('')}
   ${holoFx}
   <g pointer-events="none">
   ${text(banner, 32, 431, 21, ink, 800, font)}
@@ -216,8 +238,8 @@ export function cardInner(c, ctx) {
   ${text(credit, 32, 682, 11, sub, 500, font)}
   </g>
   ${hits}
-  <g clip-path="url(#card-${uid})">${topLayers.map(l => layerMarkup(l, ctx, c)).join('')}</g>
-  ${ctx.editing ? `<g id="handles">${handlesMarkup(selL)}</g>` : ''}`;
+  ${topLayers.map(l => layerMarkup(l, ctx, c)).join('')}
+  ${ctx.editing ? `<g id="guides" pointer-events="none"></g><g id="handles">${handlesMarkup(selL, ctx.handleK ?? 1)}</g>` : ''}`;
 }
 
 export function cardSVG(c, ctx, scale = 1) {

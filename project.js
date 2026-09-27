@@ -1,6 +1,6 @@
 // Pure project logic: loading/sanitising saves, deck legality, readability, and the data half
 // of exports. No DOM here, so tools/test-forge.mjs can exercise all of it in Node.
-import { SHAPES, MASKS, accentFor } from './render.js';
+import { SHAPES, MASKS, BLENDS, LAYER_FX, accentFor } from './render.js';
 import { defaultLayout, normalize, newId, validate, toEngine } from './model.js';
 import { VERSION, SAVE_FORMAT } from './version.js';
 
@@ -21,10 +21,15 @@ const hex = (v, d) => /^#[0-9a-f]{6}$/i.test(v) ? v : d;
 export function cleanLayer(L) {
   if (!L || !['image', 'text', 'shape', 'logo'].includes(L.kind)) return null;
   const o = { id: SAFE_ID.test(L.id) ? L.id : newId(), kind: L.kind, x: num(L.x, 250), y: num(L.y, 301), scale: clamp(num(L.scale, 1), 0.01, 20), rot: num(L.rot, 0), opacity: clamp(num(L.opacity, 1), 0, 1), zone: L.zone === 'top' ? 'top' : 'art', flip: !!L.flip, hidden: !!L.hidden };
+  if (L.locked) o.locked = true;
+  if (L.label) o.label = String(L.label).slice(0, 40);
+  if (BLENDS[L.blend] && L.blend !== 'normal') o.blend = L.blend;
+  if (LAYER_FX[L.fx] && L.fx !== 'none') Object.assign(o, { fx: L.fx, fxColor: hex(L.fxColor, ''), fxSize: clamp(num(L.fxSize, 1), 0.2, 3) });
   if (L.kind === 'image') {
     if (typeof L.asset !== 'string') return null;
     Object.assign(o, { asset: L.asset, w: num(L.w, 100), h: num(L.h, 100), name: String(L.name || 'Image').slice(0, 40), mask: MASKS[L.mask] ? L.mask : 'none',
-      bright: clamp(num(L.bright, 1), 0.2, 2), contrast: clamp(num(L.contrast, 1), 0.2, 2), sat: clamp(num(L.sat, 1), 0, 2) });
+      bright: clamp(num(L.bright, 1), 0.2, 2), contrast: clamp(num(L.contrast, 1), 0.2, 2), sat: clamp(num(L.sat, 1), 0, 2), hue: clamp(num(L.hue, 0), -180, 180) });
+    if (SAFE_ID.test(L.orig)) Object.assign(o, { orig: L.orig, cutTol: clamp(num(L.cutTol, 40), 5, 120) });
   }
   if (L.kind === 'text' || L.kind === 'shape') o.fill2 = hex(L.fill2, '');
   if (L.kind === 'text') Object.assign(o, { text: String(L.text ?? '').slice(0, 80), size: clamp(num(L.size, 40), 4, 200), color: String(L.color || '#171724'), stroke: String(L.stroke || ''), font: String(L.font || 'Impact'), bold: L.bold !== false });
@@ -69,7 +74,7 @@ export function registerNames(c, p) {
 }
 /** Asset ids still referenced by cards, the trash, brand logos or the card back. */
 export function usedAssets(p) {
-  const fromCard = c => c.layout.layers.filter(l => l.kind === 'image').map(l => l.asset);
+  const fromCard = c => c.layout.layers.filter(l => l.kind === 'image').flatMap(l => [l.asset, l.orig]);
   return new Set([...p.cards.flatMap(fromCard), ...p.trash.flatMap(t => fromCard(t.card)), ...p.brands.map(b => b.logo), p.back?.logo].filter(Boolean));
 }
 

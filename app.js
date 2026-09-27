@@ -1,4 +1,5 @@
-import { W, H, ART, FONTS, SHAPES, SHAPE_LABELS, TIMING_LABEL, esc, cardInner, cardSVG, backSVG, handlesMarkup, layerTransform, accentFor, shapeIcon, shapeMarkup, isHolo, MASKS, EDIT_REGIONS } from './render.js';
+import { W, H, ART, FONTS, SHAPES, SHAPE_LABELS, TIMING_LABEL, esc, cardInner, cardSVG, backSVG, handlesMarkup, layerTransform, layerBox, accentFor, shapeIcon, shapeMarkup, isHolo, MASKS, BLENDS, LAYER_FX, FX_COLOR, EDIT_REGIONS } from './render.js';
+import { I } from './icons.js';
 import { EFFECTS, TARGET_LABELS, PASSIVES, TIMINGS, LIMITS, autoText, normalize, newCard, uniqueCardId, slug, newId, defaultLayout, toEngine, fromEngine, validate, parseAbility, randomName, randomAbility, toCSV, parseCSV, rowsToCards, cardsToRows, CSV_COLUMNS, SHEET_HELP } from './model.js';
 import * as store from './store.js';
 import { VERSION, SAVE_FORMAT, CODENAME, RELEASED, CHANGELOG } from './version.js';
@@ -28,7 +29,7 @@ const PRESETS = {
 const TEXT_STICKERS = [['LOL!', '#ffda52'], ['NEW!', '#ff9ba7'], ['EPIC', '#ceacff'], ['RARE', '#89e4d7'], ['OOF', '#ffffff'], ['GG', '#aff57e'], ['+1', '#89d6ff'], ['NERF THIS', '#ff5a5a']];
 
 let P = null;                 // the project (set): { setName, brands, tags, folders, cards, assets, sheet }
-const ui = { lastPick: null, view: 'library', cur: null, sel: null, sec: 'stats', folder: 'all', selecting: false, picked: new Set(), f: { q: '', type: 'all', tier: 'all', brand: 'all', tag: 'all', sort: 'num', trig: 'all' } };
+const ui = { lastPick: null, view: 'library', cur: null, sel: null, sec: 'stats', dockTab: 'style', folder: 'all', selecting: false, picked: new Set(), f: { q: '', type: 'all', tier: 'all', brand: 'all', tag: 'all', sort: 'num', trig: 'all' } };
 // Ability categories: a Character's trigger (the banner words), or an Action's family.
 const TRIGGERS = {
   none:          { icon: '▫️', short: 'NONE',  label: 'No ability' },
@@ -601,7 +602,7 @@ setZoom(+(lsGet('forge-zoom') || (matchMedia('(max-width: 760px)').matches ? 104
 // ---------------------------------------------------------------- editor: window layout
 const ED = { swap: false, focus: false, bg: 0, w: 400 };
 try { Object.assign(ED, JSON.parse(lsGet('forge-editor') || '{}')); } catch { }
-const BACKDROPS = ['checker', 'dark', 'light', 'felt'];
+const BACKDROPS = ['studio', 'checker', 'dark', 'light', 'felt'];
 function applyEditorLayout() {
   const e = $('#view-editor');
   e.classList.toggle('swap', !!ED.swap); e.classList.toggle('focus', !!ED.focus);
@@ -642,49 +643,135 @@ function updateUndoButtons() { $('#undoBtn').disabled = !undoStack.length; $('#r
 
 // ---------------------------------------------------------------- editor: stage
 const svg = $('#cardSvg');
+// Canvas zoom: z plus the card point shown at the centre of the stage. The SVG keeps its CSS
+// size and only its viewBox changes, so all the pointer maths (getScreenCTM) keeps working.
+const view = { z: 1, cx: 250, cy: 350 };
+const tool = { name: 'move', space: false };
 function renderEditor() {
   const c = cur();
   for (const id of ['#prevCard', '#nextCard']) $(id).disabled = P.cards.length < 2;
-  for (const b of $$('#toolstrip .btn')) b.disabled = !c;
+  for (const b of $$('#toolRail button, #pngBtn, #shareCardBtn, #layersBtn, #zoomPill button')) b.disabled = !c;
   if (!c) {
-    svg.innerHTML = ''; $('#edTitle').textContent = 'No card open'; $('#layerBar').innerHTML = ''; $('#checks').innerHTML = '';
+    svg.innerHTML = ''; $('#edTitle').textContent = 'No card open'; $('#layerBar').innerHTML = ''; $('#checks').innerHTML = ''; $('#layersPop').hidden = true;
     $('#inspector').innerHTML = `<div class="ed-empty"><p><b>No card to edit yet.</b></p><div class="btnrow" style="justify-content:center"><button class="btn primary" data-new="CHA">+ New Character</button><button class="btn primary alt" data-new="ACT">+ New Action</button><button class="btn" data-new="random">🎲 Surprise me</button></div></div>`;
     updateUndoButtons(); return;
   }
-  renderStage(); renderInspector(); renderLayerBar(); renderChecks(); updateTitle(); updateUndoButtons();
+  applyLayersOpen();
+  renderStage(); renderInspector(); renderLayerBar(); renderLayersPop(); renderChecks(); updateTitle(); updateUndoButtons();
 }
 function updateTitle() { const c = cur(); if (c) $('#edTitle').textContent = `#${P.cards.indexOf(c) + 1} ${c.name}`; }
 function renderStage() {
   const c = cur(); if (!c) return;
-  svg.innerHTML = cardInner(c, { project: P, index: P.cards.indexOf(c), uid: 'ed', href, sel: ui.sel, editing: true });
+  svg.innerHTML = cardInner(c, { project: P, index: P.cards.indexOf(c), uid: 'ed', href, sel: ui.sel, editing: true, handleK: 1 / view.z });
 }
 function updateLayerDOM(L) {
   const t = layerTransform(L);
   for (const g of svg.querySelectorAll(`[data-layer="${L.id}"],[data-ghost="${L.id}"]`)) g.setAttribute('transform', t);
   svg.querySelector(`[data-layer="${L.id}"]`)?.setAttribute('opacity', L.opacity ?? 1);
-  const h = svg.querySelector('#handles'); if (h) h.innerHTML = handlesMarkup(L);
+  const h = svg.querySelector('#handles'); if (h) h.innerHTML = handlesMarkup(L, 1 / view.z);
 }
-function select(id) { ui.sel = id; renderStage(); renderLayerBar(); if (ui.sec === 'layers') renderInspector(); }
+function refreshLayers() { renderLayerBar(); renderLayersPop(); }
+function select(id) { ui.sel = id; renderStage(); refreshLayers(); }
 function stepCard(d) { if (P.cards.length < 2) return; const i = P.cards.indexOf(cur()); ui.cur = P.cards[(i + d + P.cards.length) % P.cards.length].uid; ui.sel = null; renderEditor(); }
 
-const pts = new Map(); let gest = null;
+// ---- canvas zoom & pan
+function metrics() { const r = svg.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, k: r.width * view.z / 640 }; }
+const clientToCard = (px, py, m = metrics()) => ({ x: view.cx + (px - m.x) / m.k, y: view.cy + (py - m.y) / m.k });
+function applyView() {
+  if (!(view.z > 1.001) || !Number.isFinite(view.cx + view.cy)) Object.assign(view, { z: 1, cx: 250, cy: 350 });
+  view.cx = clamp(view.cx, 0, 500); view.cy = clamp(view.cy, 0, 700);
+  const w = 640 / view.z, h = 840 / view.z;
+  svg.setAttribute('viewBox', `${(view.cx - w / 2).toFixed(2)} ${(view.cy - h / 2).toFixed(2)} ${w.toFixed(2)} ${h.toFixed(2)}`);
+  $('#zoomPct').textContent = Math.round(view.z * 100) + '%';
+  $('#stage').classList.toggle('zoomed', view.z > 1);
+  const hd = svg.querySelector('#handles'); if (hd) hd.innerHTML = handlesMarkup(selLayer(), 1 / view.z);
+  closeInline();
+}
+// Zoom so the card point under (px, py) stays under the finger / cursor.
+function zoomAt(z, px, py) {
+  const m = metrics(); if (!m.k) return; px ??= m.x; py ??= m.y;
+  const anchor = clientToCard(px, py, m);
+  view.z = clamp(z, 1, 8);
+  const m2 = metrics();
+  view.cx = anchor.x - (px - m2.x) / m2.k; view.cy = anchor.y - (py - m2.y) / m2.k;
+  applyView();
+}
+function setTool(name) {
+  tool.name = name;
+  for (const b of $$('#toolRail [data-tool]')) b.setAttribute('aria-pressed', b.dataset.tool === name);
+  $('#stage').classList.toggle('hand', name === 'hand' || tool.space);
+}
+
+// ---- tool rail, layers button, zoom pill
+const RAIL = [
+  ['move', I.move, 'Move', 'Move & select (V)'], ['hand', I.hand, 'Pan', 'Pan the canvas (H, or hold Space)'], null,
+  ['addImg', I.image, 'Image', 'Add an image (I)'], ['addText', I.text, 'Text', 'Add text (T)'], ['addSticker', I.shapes, 'Shapes', 'Shapes & stickers (S)'], ['addLogo', I.logo, 'Logo', 'Brand logo'],
+];
+$('#toolRail').innerHTML = RAIL.map(r => !r ? '<span class="rail-sep" aria-hidden="true"></span>'
+  : `<button type="button" class="tool" ${r[0] === 'move' || r[0] === 'hand' ? `data-tool="${r[0]}" aria-pressed="${r[0] === 'move'}"` : `id="${r[0]}"`} title="${r[3]}" aria-label="${r[3]}">${r[1]}<small>${r[2]}</small></button>`).join('');
+$('#toolRail').addEventListener('click', e => { const b = e.target.closest('[data-tool]'); if (b) setTool(b.dataset.tool); });
+$('#addImg').addEventListener('click', () => $('#imgPick').click());
+$('#addText').addEventListener('click', () => addText());
+$('#addLogo').addEventListener('click', () => addLogo());
+$('#addSticker').addEventListener('click', () => stickerPicker());
+$('#zoomPill').innerHTML = `<button type="button" data-z="out" title="Zoom out (Ctrl −)" aria-label="Zoom out">${I.minus}</button><button type="button" id="zoomPct" data-z="fit" title="Fit the card (Ctrl 0)">100%</button><button type="button" data-z="in" title="Zoom in (Ctrl +)" aria-label="Zoom in">${I.plus}</button>`;
+$('#zoomPill').addEventListener('click', e => { const z = e.target.closest('[data-z]')?.dataset.z; if (z) zoomAt(z === 'fit' ? 1 : view.z * (z === 'in' ? 1.25 : 0.8)); });
+$('#layersBtn').addEventListener('click', () => toggleLayers());
+ED.layersOpen ??= innerWidth >= 1200;
+function toggleLayers(open = !ED.layersOpen) { ED.layersOpen = open; lsSet('forge-editor', JSON.stringify(ED)); applyLayersOpen(); }
+function applyLayersOpen() {
+  const open = !!ED.layersOpen && !!cur(), pop = $('#layersPop'), was = !pop.hidden;
+  pop.hidden = !open; $('#layersBtn').setAttribute('aria-pressed', open);
+  if (open && !was) renderLayersPop();
+}
+
+// ---- pointer gestures on the card
+const pts = new Map(), ptsC = new Map(); let gest = null;
 const toCard = e => { const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(svg.getScreenCTM().inverse()); return { x: p.x, y: p.y }; };
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y), ang = (a, b) => Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI;
 const normDeg = d => ((d + 540) % 360) - 180;
+const wantsPan = e => tool.name === 'hand' || tool.space || e.button === 1;
+const startPan = e => ({ mode: 'pan', x0: e.clientX, y0: e.clientY, cx0: view.cx, cy0: view.cy, k: metrics().k });
+const midC = () => { const [a, b] = [...ptsC.values()]; return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, d: Math.max(1, dist(a, b)) }; };
+// Axis-aligned half-size of a layer after scale + rotation, for snapping and the align buttons.
+function extents(L) {
+  const { hw, hh } = layerBox(L), r = (L.rot || 0) * Math.PI / 180, s = L.scale, c = Math.abs(Math.cos(r)), n = Math.abs(Math.sin(r));
+  return { ex: (hw * c + hh * n) * s, ey: (hw * n + hh * c) * s };
+}
+// Smart guides: snap the layer's centre or edges to the card centre and the art window, and
+// draw a pink line while it's snapped (hold Alt to move freely).
+function snapMove(L, free) {
+  const g = svg.querySelector('#guides'); if (!g) return;
+  const lines = [];
+  if (!free) {
+    const { ex, ey } = extents(L), thr = 7 / view.z, midArt = ART.y + ART.h / 2;
+    const xs = [[250, 0], [ART.x, -1], [ART.x + ART.w, 1]];
+    const ys = [...(L.zone === 'top' ? [[350, 0]] : []), [midArt, 0], [ART.y, -1], [ART.y + ART.h, 1]];
+    for (const [axis, list, e] of [['x', xs, ex], ['y', ys, ey]])
+      for (const [v, side] of list) { const pos = L[axis] + side * e; if (Math.abs(pos - v) < thr) { L[axis] += v - pos; lines.push([axis, v]); break; } }
+  }
+  const w = (1.6 / view.z).toFixed(2);
+  g.innerHTML = lines.map(([a, v]) => a === 'x' ? `<line x1="${v}" y1="-70" x2="${v}" y2="770" stroke="#ff3ea5" stroke-width="${w}"/>` : `<line x1="-70" y1="${v}" x2="570" y2="${v}" stroke="#ff3ea5" stroke-width="${w}"/>`).join('');
+}
 let editTap = null;
 svg.addEventListener('pointerdown', e => {
-  if (!cur() || e.button > 0) return;
-  const hit = e.target.closest('[data-edit]');
+  if (!cur() || e.button > 1) return;
+  const pan = wantsPan(e);
+  const hit = !pan && e.target.closest('[data-edit]');
   if (hit && !pts.size) { editTap = { key: hit.dataset.edit, x: e.clientX, y: e.clientY }; gest = null; return; }
-  pts.set(e.pointerId, toCard(e)); try { svg.setPointerCapture(e.pointerId); } catch { }
+  if (e.button === 1) e.preventDefault();
+  pts.set(e.pointerId, toCard(e)); ptsC.set(e.pointerId, { x: e.clientX, y: e.clientY }); try { svg.setPointerCapture(e.pointerId); } catch { }
   let L = selLayer();
-  if (pts.size === 2 && L) {
-    const [a, b] = [...pts.values()]; snap();
-    gest = { mode: 'pinch', d0: Math.max(1, dist(a, b)), a0: ang(a, b), s0: L.scale, r0: L.rot || 0, m0: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, x0: L.x, y0: L.y };
+  if (pts.size === 2) {
+    if (L && !L.locked && gest?.mode !== 'pan') {
+      const [a, b] = [...pts.values()]; snap();
+      gest = { mode: 'pinch', d0: Math.max(1, dist(a, b)), a0: ang(a, b), s0: L.scale, r0: L.rot || 0, m0: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, x0: L.x, y0: L.y };
+    } else { const m = midC(); gest = { mode: 'vpinch', z0: view.z, d0: m.d, anchor: clientToCard(m.x, m.y) }; }
     return;
   }
+  if (pan) { gest = startPan(e); return; }
   const h = e.target.closest('[data-handle]');
-  if (h && L) {
+  if (h && L && !L.locked) {
     snap(); const p = pts.get(e.pointerId);
     gest = h.dataset.handle === 'rotate' ? { mode: 'rotate' } : { mode: 'scale', d0: Math.max(1, dist(L, p)), s0: L.scale };
     return;
@@ -695,13 +782,21 @@ svg.addEventListener('pointerdown', e => {
     L = selLayer(); gest = { mode: 'move', p0: pts.get(e.pointerId), x0: L.x, y0: L.y, moved: false };
     return;
   }
-  gest = null;
   if (ui.sel) select(null);
+  gest = view.z > 1 ? startPan(e) : null;
 });
 svg.addEventListener('pointermove', e => {
   if (!pts.has(e.pointerId)) return;
-  pts.set(e.pointerId, toCard(e));
-  const L = selLayer(); if (!gest || !L) return;
+  pts.set(e.pointerId, toCard(e)); ptsC.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (!gest) return;
+  if (gest.mode === 'pan') { view.cx = gest.cx0 - (e.clientX - gest.x0) / gest.k; view.cy = gest.cy0 - (e.clientY - gest.y0) / gest.k; return applyView(); }
+  if (gest.mode === 'vpinch') {
+    if (ptsC.size < 2) return;
+    const m = midC(); view.z = clamp(gest.z0 * m.d / gest.d0, 1, 8);
+    const mt = metrics(); view.cx = gest.anchor.x - (m.x - mt.x) / mt.k; view.cy = gest.anchor.y - (m.y - mt.y) / mt.k;
+    return applyView();
+  }
+  const L = selLayer(); if (!L) return;
   const p = pts.get(e.pointerId);
   if (gest.mode === 'pinch') {
     if (pts.size < 2) return;
@@ -710,9 +805,9 @@ svg.addEventListener('pointermove', e => {
     L.rot = normDeg(gest.r0 + ang(a, b) - gest.a0);
     L.x = gest.x0 + m.x - gest.m0.x; L.y = gest.y0 + m.y - gest.m0.y;
   } else if (gest.mode === 'move') {
-    if (!gest.moved) { if (dist(p, gest.p0) < 3) return; snap(); gest.moved = true; }
+    if (!gest.moved) { if (dist(p, gest.p0) < 3 / view.z) return; snap(); gest.moved = true; }
     L.x = gest.x0 + p.x - gest.p0.x; L.y = gest.y0 + p.y - gest.p0.y;
-    if (!e.altKey) { if (Math.abs(L.x - 250) < 6) L.x = 250; if (L.zone !== 'top' && Math.abs(L.y - 301) < 6) L.y = 301; } // soft snap to center
+    snapMove(L, e.altKey);
   } else if (gest.mode === 'scale') {
     L.scale = clamp(gest.s0 * dist(L, p) / gest.d0, 0.05, 8);
   } else if (gest.mode === 'rotate') {
@@ -728,20 +823,30 @@ const pointerEnd = e => {
     if (e.type === 'pointerup' && Math.hypot(e.clientX - t.x, e.clientY - t.y) < 10) { if (ui.sel) select(null); openInline(t.key); }
     return;
   }
-  pts.delete(e.pointerId);
-  if (gest?.mode === 'pinch' && pts.size < 2) { save(); gest = null; }
-  if (!pts.size) { if (gest && (gest.mode !== 'move' || gest.moved)) save(); gest = null; }
+  pts.delete(e.pointerId); ptsC.delete(e.pointerId);
+  if ((gest?.mode === 'pinch' || gest?.mode === 'vpinch') && pts.size < 2) { if (gest.mode === 'pinch') save(); gest = null; }
+  if (!pts.size) {
+    if (gest && gest.mode !== 'pan' && (gest.mode !== 'move' || gest.moved)) save();
+    gest = null; svg.querySelector('#guides')?.replaceChildren();
+  }
 };
 svg.addEventListener('pointerup', pointerEnd);
 svg.addEventListener('pointercancel', pointerEnd);
-svg.addEventListener('wheel', e => {
-  const L = selLayer(); if (!L) return;
-  e.preventDefault(); snap();
-  if (e.altKey || e.shiftKey) L.rot = normDeg((L.rot || 0) + (e.deltaY > 0 ? 3 : -3));
-  else L.scale = clamp(L.scale * Math.exp(-e.deltaY * 0.0015), 0.05, 8);
-  updateLayerDOM(L); syncLayerBar(L); save();
+$('#stage').addEventListener('wheel', e => {
+  if (!cur() || e.target.closest('.layers-pop, .rail, .zoom-pill, .layers-btn, .inline-edit')) return;
+  if (e.ctrlKey || e.metaKey) { e.preventDefault(); zoomAt(view.z * Math.exp(-e.deltaY * 0.0025), e.clientX, e.clientY); return; }
+  const L = selLayer();
+  if (L && !L.locked && e.target.closest('#cardSvg')) {
+    e.preventDefault(); snap();
+    if (e.altKey || e.shiftKey) L.rot = normDeg((L.rot || 0) + (e.deltaY > 0 ? 3 : -3));
+    else L.scale = clamp(L.scale * Math.exp(-e.deltaY * 0.0015), 0.05, 8);
+    updateLayerDOM(L); syncLayerBar(L); save();
+  } else if (view.z > 1) { e.preventDefault(); const k = metrics().k; view.cx += e.deltaX / k; view.cy += e.deltaY / k; applyView(); }
 }, { passive: false });
-svg.addEventListener('dblclick', e => { if (e.target.closest('[data-layer]') && selLayer()?.kind === 'text') $('#layerBar [data-lf="text"]')?.select(); });
+svg.addEventListener('dblclick', e => {
+  if (!e.target.closest('[data-layer]') || selLayer()?.kind !== 'text') return;
+  ui.dockTab = 'style'; renderLayerBar(); $('#layerBar [data-lf="text"]')?.select();
+});
 
 // Type straight onto the card: an input is laid over the tapped region, sized to match.
 function closeInline() { $('#stage .inline-edit')?.remove(); }
@@ -811,81 +916,252 @@ async function commitInline(key, v) {
 }
 
 // ---------------------------------------------------------------- editor: layers
-const layerName = L => L.kind === 'logo' ? 'Brand logo' : L.kind === 'image' ? (L.name || 'Image') : L.kind === 'text' ? `“${L.text}”` : SHAPE_LABELS[L.shape] || 'Shape';
-const layerIcon = L => L.kind === 'logo' ? '<span class="thumb">🏷</span>' : L.kind === 'image' ? `<img class="thumb" src="${href(L.asset)}" alt="">` : L.kind === 'text' ? '<span class="thumb">T</span>' : `<span class="thumb">${shapeIcon(L.shape, L.fill, 22)}</span>`;
+const layerName = L => L.label || (L.kind === 'logo' ? 'Brand logo' : L.kind === 'image' ? (L.name || 'Image') : L.kind === 'text' ? `“${L.text}”` : SHAPE_LABELS[L.shape] || 'Shape');
+const layerIcon = L => L.kind === 'logo' ? `<span class="thumb">${I.logo}</span>` : L.kind === 'image' ? `<img class="thumb img" src="${href(L.asset)}" alt="">`
+  : L.kind === 'text' ? `<span class="thumb txt" style="color:${esc(L.color || '#171724')}">Aa</span>` : `<span class="thumb">${shapeIcon(L.shape, L.fill, 22)}</span>`;
+
+// Layer list for the floating Layers panel.
+// Top of the list draws on top, like every paint app.
+function layersList(c) {
+  const rows = [...c.layout.layers].reverse().map(L => {
+    const on = ui.sel === L.id, bits = [L.zone === 'top' ? 'Over card' : 'Art window'];
+    if (L.blend && L.blend !== 'normal') bits.push(BLENDS[L.blend]);
+    if ((L.opacity ?? 1) < 1) bits.push(Math.round(L.opacity * 100) + '%');
+    return `<div class="lp-row${on ? ' on' : ''}${L.hidden ? ' off' : ''}" data-row="${L.id}">
+      <span class="grip" data-grip="${L.id}" title="Drag to reorder">${I.grip}</span>${layerIcon(L)}
+      <button type="button" class="nm" data-pick="${L.id}" title="Tap to select · double-click to rename"><span>${esc(layerName(L))}</span><small>${bits.join(' · ')}</small></button>
+      <button type="button" class="lp-ic lock" data-lact="lock" data-id="${L.id}" title="${L.locked ? 'Unlock' : 'Lock'}" aria-label="${L.locked ? 'Unlock' : 'Lock'}" aria-pressed="${!!L.locked}">${L.locked ? I.lock : I.unlock}</button>
+      <button type="button" class="lp-ic" data-lact="hide" data-id="${L.id}" title="${L.hidden ? 'Show' : 'Hide'}" aria-label="${L.hidden ? 'Show' : 'Hide'}" aria-pressed="${!L.hidden}">${L.hidden ? I.eyeOff : I.eye}</button>
+    </div>${on ? `<div class="lp-more">${slider('opacity', 'Opacity', 0.05, 1, 0.01, L.opacity ?? 1)}
+      <label class="dk-field"><span>Blend</span><select data-lf="blend">${Object.entries(BLENDS).map(([k, v]) => `<option value="${k}" ${(L.blend || 'normal') === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label></div>` : ''}`;
+  }).join('');
+  return `<div class="lp-list" data-layers>${rows}<div class="lp-row base"><span class="thumb">${I.card}</span><button type="button" class="nm" data-go="design"><span>Card frame</span><small>Colours, font &amp; foil → Design</small></button></div></div>`;
+}
+function renderLayersPop() {
+  const c = cur(), n = c?.layout.layers.length ?? 0;
+  $('#layersBtn').innerHTML = `${I.layers}<span>Layers</span>${n ? `<b>${n}</b>` : ''}`;
+  const pop = $('#layersPop'); if (pop.hidden || !c) return;
+  const top = pop.querySelector('.lp-body')?.scrollTop || 0;
+  pop.innerHTML = `<div class="lp-head"><b>Layers</b><span class="spacer"></span>
+    <button type="button" class="lp-ic" data-add="img" title="Add image" aria-label="Add image">${I.image}</button><button type="button" class="lp-ic" data-add="text" title="Add text" aria-label="Add text">${I.text}</button><button type="button" class="lp-ic" data-add="sticker" title="Add a shape or sticker" aria-label="Add a shape or sticker">${I.shapes}</button>
+    <button type="button" class="lp-ic" data-lp="close" title="Close (L)" aria-label="Close layers">${I.close}</button></div>
+    <div class="lp-body">${c.layout.layers.length ? '' : '<p class="lp-empty">No layers yet. Add an image, some text or a sticker — or drop a picture onto the card.</p>'}${layersList(c)}</div>`;
+  pop.querySelector('.lp-body').scrollTop = top;
+}
+function layersClick(e) {
+  const t = e.target.closest('[data-pick],[data-lact],[data-add],[data-lp],[data-go]'); if (!t) return false;
+  const d = t.dataset;
+  if (d.pick) { if (ui.sel !== d.pick) select(d.pick); }
+  else if (d.lact) layerAction(d.lact, d.id);
+  else if (d.add) ({ img: () => $('#imgPick').click(), text: addText, sticker: stickerPicker, logo: addLogo })[d.add]?.();
+  else if (d.lp === 'close') toggleLayers(false);
+  else if (d.go) { ui.sec = d.go; if (ED.focus) { ED.focus = false; applyEditorLayout(); } renderInspector(); }
+  return true;
+}
+async function renameLayer(id) {
+  const L = cur()?.layout.layers.find(l => l.id === id); if (!L) return;
+  const n = await promptText('Rename layer', 'Layer name (blank = automatic)', layerName(L)); if (n == null) return;
+  snap(); L.label = n.slice(0, 40); if (!L.label) delete L.label; refreshLayers(); save();
+}
+$('#layersPop').addEventListener('click', layersClick);
+$('#layersPop').addEventListener('dblclick', e => { const p = e.target.closest('[data-pick]'); if (p) renameLayer(p.dataset.pick); });
+// Drag a row's grip to restack (mouse or touch). Rows are shown top-first, so dropping on a
+// row takes that row's place in the stack.
+document.addEventListener('pointerdown', e => {
+  const grip = e.target.closest('[data-grip]'), list = grip?.closest('[data-layers]'); if (!grip || !list) return;
+  e.preventDefault();
+  const id = grip.dataset.grip, row = grip.closest('[data-row]'); row.classList.add('dragging');
+  let target = null;
+  const move = ev => {
+    const r = document.elementFromPoint(ev.clientX, ev.clientY)?.closest('[data-row]');
+    for (const x of $$('.lp-row.drop', list)) x.classList.remove('drop');
+    target = r && r !== row && list.contains(r) ? r.dataset.row : null;
+    if (target) r.classList.add('drop');
+  };
+  const up = () => {
+    removeEventListener('pointermove', move); row.classList.remove('dragging');
+    const ls = cur()?.layout.layers; if (!target || !ls) return refreshLayers();
+    const from = ls.findIndex(l => l.id === id), to = ls.findIndex(l => l.id === target); if (from < 0 || to < 0) return;
+    snap(); ls.splice(to, 0, ls.splice(from, 1)[0]);
+    renderStage(); refreshLayers(); save();
+  };
+  addEventListener('pointermove', move); addEventListener('pointerup', up, { once: true });
+});
+
+// ---- the context dock under the canvas: options for whatever is selected
+const DOCK_TABS = { transform: 'Transform', style: 'Style', adjust: 'Adjust', fx: 'Effects' };
+const SWATCHES = ['#ffffff', '#171724', '#ff5a5a', '#ff9ba7', '#ffda52', '#aff57e', '#89e4d7', '#89d6ff', '#ceacff', '#ff71ce'];
+const FMT = { scale: v => Math.round(v * 100) + '%', rot: v => Math.round(v) + '°', opacity: v => Math.round(v * 100) + '%', bright: v => Math.round(v * 100) + '%', contrast: v => Math.round(v * 100) + '%', sat: v => Math.round(v * 100) + '%', hue: v => Math.round(v) + '°', fxSize: v => (+v).toFixed(1) + '×', size: v => Math.round(v), cutTol: v => Math.round(v) };
+const slider = (k, label, min, max, step, v) => `<label class="sl"><span>${label}</span><input type="range" data-lf="${k}" min="${min}" max="${max}" step="${step}" value="${v}"><output data-out="${k}">${(FMT[k] || String)(v)}</output></label>`;
+function swatchRow(c, field, value) {
+  const list = [...new Set([accentFor(c), c.layout.ink, c.layout.paper, ...SWATCHES].filter(v => /^#[0-9a-f]{6}$/i.test(v)).map(v => v.toLowerCase()))].slice(0, 13);
+  return `<div class="swatches">${list.map(v => `<button type="button" class="sw" data-sw="${v}" data-swf="${field}" style="--c:${v}" title="${v}" aria-label="Colour ${v}" aria-pressed="${String(value).toLowerCase() === v}"></button>`).join('')}
+    <label class="sw sw-any" title="Any colour"><input type="color" data-lf="${field}" value="${esc(/^#[0-9a-f]{6}$/i.test(value) ? value : '#ffffff')}" aria-label="Pick any colour"></label></div>`;
+}
+const dk = (a, icon, title, pressed) => `<button type="button" class="dk-ic" data-la="${a}" title="${title}" aria-label="${title}"${pressed != null ? ` aria-pressed="${pressed}"` : ''}>${icon}</button>`;
+const dkBtn = (a, icon, label, extra = '') => `<button type="button" class="dk-btn${extra}" data-la="${a}">${icon}<span>${label}</span></button>`;
 function renderLayerBar() {
-  const L = selLayer(), bar = $('#layerBar');
-  if (!cur()) { bar.innerHTML = ''; return; }
-  if (!L) { bar.innerHTML = `<span class="hint">✎ <b>Tap any text on the card</b> (name, cost, HP, banner, rules) to type into it. 👆 Tap art or a sticker to grab it: drag to move · white corners resize · yellow dot spins · pinch or scroll-wheel works too.</span>`; return; }
-  const fontOpts = FONTS.map(f => `<option ${L.font === f ? 'selected' : ''}>${f}</option>`).join('');
-  bar.innerHTML = `
-  <div class="row"><b>${esc(layerName(L).slice(0, 26))}</b><span class="spacer"></span>
-    <button class="btn small" data-la="zone" title="Clip inside the art window, or float over the whole card">${L.zone === 'top' ? '⬆ Over card' : '🖼 In art window'}</button>
-    <button class="btn small" data-la="flip" title="Mirror">⇋</button>
-    <button class="btn small" data-la="back" title="Send backward">▼</button><button class="btn small" data-la="front" title="Bring forward">▲</button>
-    <button class="btn small" data-la="dup" title="Duplicate">⧉</button><button class="btn small danger-btn" data-la="del" title="Delete">🗑</button>
-    <button class="btn small primary" data-la="done">Done</button></div>
-  ${L.kind === 'text' ? `<div class="row"><input type="text" data-lf="text" value="${esc(L.text)}" maxlength="40" aria-label="Sticker text">
-    <label>Color <input type="color" data-lf="color" value="${esc(L.color)}"></label>
-    <label><input type="checkbox" data-lf="hasStroke" ${L.stroke ? 'checked' : ''}> Outline</label><input type="color" data-lf="stroke" value="${esc(L.stroke || '#171724')}" aria-label="Outline color">
-    <select data-lf="font" aria-label="Font" style="width:auto">${fontOpts}</select>
-    <label><input type="checkbox" data-lf="hasFill2" ${L.fill2 ? 'checked' : ''}> Gradient</label><input type="color" data-lf="fill2" value="${esc(L.fill2 || '#ceacff')}" aria-label="Gradient end color"></div>` : ''}
-  ${L.kind === 'image' ? `<div class="row"><button class="btn small" data-la="fill" title="Cover the whole art window">⤢ Fill art</button><button class="btn small" data-la="fit" title="Show the whole picture inside the art window">⊡ Fit art</button><button class="btn small" data-la="center">✛ Center</button><button class="btn small" data-la="resetLook">↺ Reset look</button></div>
-  <label class="slider">☀ Bright <input type="range" data-lf="bright" min="0.2" max="2" step="0.05" value="${L.bright ?? 1}"></label>
-  <label class="slider">◐ Contrast <input type="range" data-lf="contrast" min="0.2" max="2" step="0.05" value="${L.contrast ?? 1}"></label>
-  <label class="slider">🎨 Color <input type="range" data-lf="sat" min="0" max="2" step="0.05" value="${L.sat ?? 1}"></label>
-  <div class="row"><label>Mask <select data-lf="mask" style="width:auto">${Object.entries(MASKS).map(([k, v]) => `<option value="${k}" ${(L.mask || 'none') === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label><span class="hint">Crops the picture into a shape. It always stays inside the card.</span></div>` : ''}
-  ${L.kind === 'logo' ? `<div class="row"><span class="hint">Shows this card's brand logo. Upload logos in the Brands tab. Use <b>Fade</b> to make it a watermark.</span></div>` : ''}
-  ${L.kind === 'shape' ? `<div class="row"><select data-lf="shape" aria-label="Shape" style="width:auto">${Object.keys(SHAPES).map(s => `<option value="${s}" ${L.shape === s ? 'selected' : ''}>${SHAPE_LABELS[s]}</option>`).join('')}</select>
-    <label>Fill <input type="color" data-lf="fill" value="${esc(L.fill)}"></label>
-    <label><input type="checkbox" data-lf="hasStroke" ${L.stroke ? 'checked' : ''}> Outline</label><input type="color" data-lf="stroke" value="${esc(L.stroke || '#171724')}" aria-label="Outline color">
-    <label><input type="checkbox" data-lf="hasFill2" ${L.fill2 ? 'checked' : ''}> Gradient</label><input type="color" data-lf="fill2" value="${esc(L.fill2 || '#ceacff')}" aria-label="Gradient end color"></div>` : ''}
-  <label class="slider">Size <input type="range" data-lf="scale" min="0.05" max="4" step="0.01" value="${L.scale}"></label>
-  <label class="slider">Spin <input type="range" data-lf="rot" min="-180" max="180" step="1" value="${L.rot || 0}"></label>
-  <label class="slider">Fade <input type="range" data-lf="opacity" min="0.05" max="1" step="0.01" value="${L.opacity ?? 1}"></label>`;
+  const c = cur(), L = selLayer(), bar = $('#layerBar');
+  if (!c) { bar.innerHTML = ''; return; }
+  if (!L) {
+    bar.innerHTML = `<div class="dock-hint"><span><b>Tap text on the card</b> to type into it</span><span><b>Tap art</b> to grab it · corners resize · yellow dot spins</span><span><b>Pinch</b> or <b>Ctrl + scroll</b> to zoom · <b>Space + drag</b> to pan</span></div>`;
+    return;
+  }
+  const tabs = Object.keys(DOCK_TABS).filter(k => k !== 'adjust' || L.kind === 'image');
+  const tab = tabs.includes(ui.dockTab) ? ui.dockTab : 'style';
+  const head = `<div class="dock-head">${layerIcon(L)}<b class="dock-name">${esc(layerName(L).slice(0, 28))}</b>
+    <button type="button" class="zone-pill" data-la="zone" title="Clip inside the art window, or float over the whole card">${L.zone === 'top' ? 'Over card' : 'In art window'}</button>
+    <span class="spacer"></span>
+    <span class="dk-group">${dk('flip', I.flip, 'Mirror')}${dk('back', I.down, 'Send backward  [')}${dk('front', I.up, 'Bring forward  ]')}${dk('dup', I.dup, 'Duplicate  Ctrl+D')}${dk('lock', L.locked ? I.lock : I.unlock, L.locked ? 'Unlock' : 'Lock', !!L.locked)}${dk('del', I.trash, 'Delete  Del')}</span>
+    <button type="button" class="dk-done" data-la="done" title="Done (Esc)">${I.check}<span>Done</span></button></div>`;
+  if (L.locked) { bar.innerHTML = head + `<div class="dock-body"><p class="dock-note">${I.lock} Locked, so it can't be nudged by accident. Unlock it to edit.</p></div>`; return; }
+  const tabBar = `<div class="dock-tabs" role="tablist">${tabs.map(k => `<button type="button" role="tab" data-dtab="${k}" aria-selected="${k === tab}">${DOCK_TABS[k]}</button>`).join('')}</div>`;
+  bar.innerHTML = head + tabBar + `<div class="dock-body">${dockBody(c, L, tab)}</div>`;
+}
+function dockBody(c, L, tab) {
+  if (tab === 'transform') return `<div class="dock-row"><span class="dk-group">${dk('alignL', I.alignL, 'Align left')}${dk('alignCH', I.alignCH, 'Centre horizontally')}${dk('alignR', I.alignR, 'Align right')}${dk('alignT', I.alignT, 'Align top')}${dk('alignCV', I.alignCV, 'Centre vertically')}${dk('alignB', I.alignB, 'Align bottom')}</span>
+      <span class="dock-note">to the ${L.zone === 'top' ? 'card' : 'art window'}</span><span class="spacer"></span>
+      ${L.kind === 'image' ? dkBtn('fill', I.fill, 'Fill art') + dkBtn('fit', I.fit, 'Fit art') : ''}${dkBtn('center', I.center, 'Center')}</div>
+    <div class="sliders">${slider('scale', 'Size', 0.05, 4, 0.01, L.scale)}${slider('rot', 'Spin', -180, 180, 1, L.rot || 0)}${slider('opacity', 'Opacity', 0.05, 1, 0.01, L.opacity ?? 1)}</div>`;
+  if (tab === 'adjust') return `<div class="sliders">${slider('bright', 'Brightness', 0.2, 2, 0.05, L.bright ?? 1)}${slider('contrast', 'Contrast', 0.2, 2, 0.05, L.contrast ?? 1)}${slider('sat', 'Saturation', 0, 2, 0.05, L.sat ?? 1)}${slider('hue', 'Hue shift', -180, 180, 1, L.hue || 0)}</div>
+    <div class="dock-row">${dkBtn('resetLook', I.restore, 'Reset adjustments')}</div>`;
+  if (tab === 'fx') {
+    const fx = L.fx || 'none';
+    return `<div class="dock-row"><label class="dk-field"><span>Blend</span><select data-lf="blend">${Object.entries(BLENDS).map(([k, v]) => `<option value="${k}" ${(L.blend || 'normal') === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+      <div class="seg-soft" role="group" aria-label="Effect">${Object.entries(LAYER_FX).map(([k, v]) => `<button type="button" data-setfx="${k}" aria-pressed="${fx === k}">${v}</button>`).join('')}</div></div>
+      ${fx !== 'none' ? `${swatchRow(c, 'fxColor', L.fxColor || FX_COLOR[fx])}<div class="sliders">${slider('fxSize', 'Amount', 0.2, 3, 0.05, L.fxSize ?? 1)}</div>`
+      : '<p class="dock-note">Try <b>Sticker outline</b> on cut-out art, <b>Glow</b> on a title, or blend a scribble in with <b>Multiply</b>.</p>'}`;
+  }
+  const outline = `<label class="dk-check"><input type="checkbox" data-lf="hasStroke" ${L.stroke ? 'checked' : ''}> Outline</label><input type="color" data-lf="stroke" value="${esc(L.stroke || '#171724')}" aria-label="Outline colour">
+    <label class="dk-check"><input type="checkbox" data-lf="hasFill2" ${L.fill2 ? 'checked' : ''}> Fade to</label><input type="color" data-lf="fill2" value="${esc(L.fill2 || '#ceacff')}" aria-label="Gradient end colour">`;
+  if (L.kind === 'text') return `<div class="dock-row"><input type="text" class="dk-text" data-lf="text" value="${esc(L.text)}" maxlength="40" aria-label="Text">
+      <select data-lf="font" aria-label="Font" class="dk-font">${FONTS.map(f => `<option ${L.font === f ? 'selected' : ''} style="font-family:'${f}'">${f}</option>`).join('')}</select>
+      <button type="button" class="dk-ic" data-la="bold" title="Bold" aria-label="Bold" aria-pressed="${L.bold !== false}"><b>B</b></button></div>
+    ${swatchRow(c, 'color', L.color)}<div class="dock-row">${outline}</div><div class="sliders">${slider('size', 'Text size', 10, 120, 1, L.size)}</div>`;
+  if (L.kind === 'shape') return `<div class="shape-pick">${Object.keys(SHAPES).map(s => `<button type="button" data-setshape="${s}" title="${SHAPE_LABELS[s]}" aria-label="${SHAPE_LABELS[s]}" aria-pressed="${L.shape === s}">${shapeIcon(s, 'currentColor', 22)}</button>`).join('')}</div>
+    ${swatchRow(c, 'fill', L.fill)}<div class="dock-row">${outline}</div>`;
+  if (L.kind === 'image') return `<div class="dock-row">${dkBtn('cutout', I.wand, L.orig ? 'Background removed' : 'Remove background', ' accent')}${L.orig ? dkBtn('restore', I.restore, 'Original') : ''}
+      <label class="dk-field"><span>Mask</span><select data-lf="mask">${Object.entries(MASKS).map(([k, v]) => `<option value="${k}" ${(L.mask || 'none') === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label></div>
+    ${L.orig ? `<div class="sliders">${slider('cutTol', 'Strength', 5, 120, 1, L.cutTol ?? 40)}</div><p class="dock-note">Too much eaten away? Lower the strength. Bits of background left? Raise it.</p>`
+      : '<p class="dock-note">Remove background works best on a plain background, like a drawing on white paper or a green screen.</p>'}`;
+  return `<p class="dock-note">Shows this card's brand logo. Upload logos in the Brands tab, then use Opacity (Transform) or a blend mode (Effects) to make it a watermark.</p>`;
 }
 function syncLayerBar(L) {
-  const s = $('#layerBar [data-lf="scale"]'), r = $('#layerBar [data-lf="rot"]');
-  if (s) s.value = L.scale; if (r) r.value = L.rot || 0;
+  for (const k of ['scale', 'rot']) {
+    const s = $(`#layerBar [data-lf="${k}"]`), o = $(`#layerBar [data-out="${k}"]`), v = k === 'rot' ? L.rot || 0 : L.scale;
+    if (s) s.value = v; if (o) o.textContent = FMT[k](v);
+  }
 }
-$('#layerBar').addEventListener('input', e => {
+function layerField(e) {
   const L = selLayer(), el = e.target, k = el.dataset.lf; if (!L || !k) return;
+  const out = el.parentElement?.querySelector(`[data-out="${k}"]`); if (out) out.textContent = FMT[k](+el.value);
+  if (k === 'cutTol') { if (e.type === 'change') { L.cutTol = +el.value; cutOut(L); } return; }
+  if (e.type === 'change' && el.type === 'range') return renderLayersPop();
+  if (e.type === 'change') return;
   snap();
-  if (k === 'hasStroke') L.stroke = el.checked ? ($('#layerBar [data-lf="stroke"]').value || '#171724') : '';
+  if (k === 'hasStroke') L.stroke = el.checked ? (el.parentElement.parentElement.querySelector('[data-lf="stroke"]')?.value || '#171724') : '';
   else if (k === 'stroke') { L.stroke = el.value; const cb = $('#layerBar [data-lf="hasStroke"]'); if (cb) cb.checked = true; }
-  else if (k === 'hasFill2') L.fill2 = el.checked ? ($('#layerBar [data-lf="fill2"]').value || '#ceacff') : '';
+  else if (k === 'hasFill2') L.fill2 = el.checked ? (el.parentElement.parentElement.querySelector('[data-lf="fill2"]')?.value || '#ceacff') : '';
   else if (k === 'fill2') { L.fill2 = el.value; const cb = $('#layerBar [data-lf="hasFill2"]'); if (cb) cb.checked = true; }
   else if (['scale', 'rot', 'opacity'].includes(k)) { L[k] = +el.value; updateLayerDOM(L); save(); return; }
-  else if (['bright', 'contrast', 'sat'].includes(k)) { L[k] = +el.value; renderStage(); save(); return; }
+  else if (['bright', 'contrast', 'sat', 'hue', 'fxSize', 'size'].includes(k)) { L[k] = +el.value; renderStage(); save(); return; }
+  else if (k === 'blend') { L.blend = el.value; renderStage(); refreshLayers(); save(); return; }
   else L[k] = el.value;
   renderStage(); save();
-  if (k === 'text' && ui.sec === 'layers') renderInspector();
+  if (['color', 'fill', 'fxColor'].includes(k)) for (const b of $$(`#layerBar [data-swf="${k}"]`)) b.setAttribute('aria-pressed', b.dataset.sw === el.value.toLowerCase());
+  if (k === 'text' || k === 'mask') renderLayersPop();
+}
+for (const box of [$('#layerBar'), $('#layersPop')]) { box.addEventListener('input', layerField); box.addEventListener('change', layerField); }
+$('#layerBar').addEventListener('click', e => {
+  const b = e.target.closest('[data-la],[data-dtab],[data-sw],[data-setshape],[data-setfx]'); if (!b) return;
+  const L = selLayer(), d = b.dataset;
+  if (d.la) return layerAction(d.la);
+  if (d.dtab) { ui.dockTab = d.dtab; return renderLayerBar(); }
+  if (!L) return;
+  snap();
+  if (d.sw) L[d.swf] = d.sw;
+  if (d.setshape) L.shape = d.setshape;
+  if (d.setfx) { L.fx = d.setfx; if (L.fx === 'none') delete L.fx; }
+  renderStage(); renderLayerBar(); renderLayersPop(); save();
 });
-$('#layerBar').addEventListener('click', e => { const b = e.target.closest('[data-la]'); if (b) layerAction(b.dataset.la); });
 function layerAction(a, id = ui.sel) {
   const c = cur(); if (!c) return;
   const layers = c.layout.layers, i = layers.findIndex(l => l.id === id), L = layers[i]; if (!L) return;
   if (a === 'done') return select(null);
+  if (a === 'cutout') return cutOut(L);
   snap();
   if (a === 'fill' || a === 'fit') {
     const pick = a === 'fill' ? Math.max : Math.min;
     Object.assign(L, { zone: 'art', rot: 0, x: ART.x + ART.w / 2, y: ART.y + ART.h / 2, scale: pick(ART.w / L.w, ART.h / L.h) });
   }
   if (a === 'center') Object.assign(L, L.zone === 'top' ? { x: W / 2, y: H / 2 } : { x: ART.x + ART.w / 2, y: ART.y + ART.h / 2 });
-  if (a === 'resetLook') Object.assign(L, { bright: 1, contrast: 1, sat: 1 });
+  if (a.startsWith('align')) {
+    const Z = L.zone === 'top' ? { x: 12, y: 12, w: 476, h: 676 } : ART, { ex, ey } = extents(L);
+    ({ alignL: () => L.x = Z.x + ex, alignCH: () => L.x = Z.x + Z.w / 2, alignR: () => L.x = Z.x + Z.w - ex, alignT: () => L.y = Z.y + ey, alignCV: () => L.y = Z.y + Z.h / 2, alignB: () => L.y = Z.y + Z.h - ey })[a]?.();
+  }
+  if (a === 'resetLook') Object.assign(L, { bright: 1, contrast: 1, sat: 1, hue: 0 });
+  if (a === 'restore' && L.orig) { L.asset = L.orig; delete L.orig; delete L.cutTol; }
   if (a === 'zone') L.zone = L.zone === 'top' ? 'art' : 'top';
   if (a === 'flip') L.flip = !L.flip;
+  if (a === 'bold') L.bold = L.bold === false;
+  if (a === 'lock') L.locked = !L.locked;
   if (a === 'hide') L.hidden = !L.hidden;
   if (a === 'front' && i < layers.length - 1) layers.splice(i + 1, 0, layers.splice(i, 1)[0]);
   if (a === 'back' && i > 0) layers.splice(i - 1, 0, layers.splice(i, 1)[0]);
-  if (a === 'dup') { const d = { ...clone(L), id: newId(), x: L.x + 20, y: L.y + 20 }; layers.splice(i + 1, 0, d); ui.sel = d.id; }
+  if (a === 'dup') { const d = { ...clone(L), id: newId(), x: L.x + 20, y: L.y + 20 }; delete d.label; delete d.locked; layers.splice(i + 1, 0, d); ui.sel = d.id; }
   if (a === 'del') { layers.splice(i, 1); if (ui.sel === id) ui.sel = null; toast('Layer deleted — Ctrl+Z / ↶ brings it back'); }
-  renderStage(); renderLayerBar(); if (ui.sec === 'layers' || ui.sec === 'design') renderInspector(); save();
+  renderStage(); refreshLayers(); if (ui.sec === 'design') renderInspector(); save();
 }
 function addLayer(L) {
   const c = cur(); if (!c) return toast('Make or open a card first.', true);
   snap(); c.layout.layers.push({ id: newId(), scale: 1, rot: 0, opacity: 1, ...L });
-  select(c.layout.layers.at(-1).id); if (ui.sec === 'layers') renderInspector(); save();
+  ui.dockTab = L.kind === 'image' ? 'transform' : 'style';
+  select(c.layout.layers.at(-1).id); save();
+}
+
+// ---- remove background: flood-fill the edge colour away, so cut-out art gets a clean shape.
+// Works from the untouched original each time (kept in L.orig), so Strength can be re-tuned.
+async function cutOut(L) {
+  const src = P.assets[L.orig || L.asset]; if (!src) return;
+  toast('✨ Removing the background…');
+  await sleep(30);
+  try {
+    const img = new Image(); img.src = src; await img.decode();
+    const w = img.naturalWidth, h = img.naturalHeight, cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+    const g = cv.getContext('2d', { willReadFrequently: true }); g.drawImage(img, 0, 0);
+    const d = g.getImageData(0, 0, w, h), px = d.data, tol = L.cutTol ?? 40;
+    const edge = [];
+    for (let x = 0; x < w; x++) edge.push(x, (h - 1) * w + x);
+    for (let y = 1; y < h - 1; y++) edge.push(y * w, y * w + w - 1);
+    // Background = the most common colour around the border (white paper, green screen…).
+    const key = o => (px[o] >> 4) << 8 | (px[o + 1] >> 4) << 4 | (px[o + 2] >> 4), counts = new Map();
+    for (const i of edge) if (px[i * 4 + 3] > 15) { const k = key(i * 4); counts.set(k, (counts.get(k) || 0) + 1); }
+    if (!counts.size) return toast('This picture already has a see-through background.');
+    const best = [...counts].sort((a, b) => b[1] - a[1])[0][0];
+    let r = 0, gr = 0, b = 0, n = 0;
+    for (const i of edge) { const o = i * 4; if (px[o + 3] > 15 && key(o) === best) { r += px[o]; gr += px[o + 1]; b += px[o + 2]; n++; } }
+    r /= n; gr /= n; b /= n;
+    const far = o => Math.hypot(px[o] - r, px[o + 1] - gr, px[o + 2] - b), bg = i => px[i * 4 + 3] < 16 || far(i * 4) <= tol;
+    // Flood inward from the border, so the same colour inside the drawing survives.
+    const seen = new Uint8Array(w * h), stack = [];
+    for (const i of edge) if (!seen[i] && bg(i)) { seen[i] = 1; stack.push(i); }
+    while (stack.length) {
+      const i = stack.pop(), x = i % w; px[i * 4 + 3] = 0;
+      for (const j of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, i - w, i + w]) if (j >= 0 && j < w * h && !seen[j] && bg(j)) { seen[j] = 1; stack.push(j); }
+    }
+    // Soften the new edge: pixels touching the cut fade by how close they are to the background.
+    for (let i = 0; i < w * h; i++) {
+      if (seen[i]) continue;
+      const x = i % w;
+      if (!((x > 0 && seen[i - 1]) || (x < w - 1 && seen[i + 1]) || (i >= w && seen[i - w]) || (i + w < w * h && seen[i + w]))) continue;
+      const o = i * 4, f = far(o); if (f < tol * 2) px[o + 3] = Math.min(px[o + 3], Math.round(255 * (f - tol) / tol));
+    }
+    g.putImageData(d, 0, 0);
+    snap(); const id = newId('a'); P.assets[id] = cv.toDataURL('image/png');
+    L.orig ||= L.asset; L.asset = id; L.cutTol = tol;
+    renderStage(); refreshLayers(); save();
+    toast('✨ Background removed. Tweak Strength if it took too much or too little.');
+  } catch (err) { console.error(err); toast("Couldn't remove the background from that picture.", true); }
 }
 async function fileToAsset(file) {
   const url = URL.createObjectURL(file);
@@ -939,7 +1215,7 @@ function renderInspector() {
   const c = cur(); if (!c) return;
   for (const b of $$('#sectabs button')) b.setAttribute('aria-selected', b.dataset.sec === ui.sec);
   const body = $('#inspector'), top = body.scrollTop;
-  body.innerHTML = ({ stats: secStats, brand: secBrand, ability: secAbility, design: secDesign, layers: secLayers })[ui.sec](c);
+  body.innerHTML = ({ stats: secStats, brand: secBrand, ability: secAbility, design: secDesign })[ui.sec](c);
   body.scrollTop = top;
 }
 function secStats(c) {
@@ -1016,19 +1292,7 @@ function secDesign(c) {
   <label class="inline" style="text-transform:none;font-size:13px;color:inherit;margin-top:6px"><input type="checkbox" data-f="layout.placeholder" ${L.placeholder !== false ? 'checked' : ''}> Brand placeholder when there's no art</label>
   <label class="inline" style="text-transform:none;font-size:13px;color:inherit;margin-top:6px"><input type="checkbox" data-f="layout.badge" ${L.badge !== false ? 'checked' : ''}> Brand logo badge (when the brand has a logo)</label>
   ${L.badge !== false ? `<label class="slider inline small" style="margin-top:6px">Badge see-through <input type="range" data-f="layout.badgeOpacity" min="0.1" max="1" step="0.05" value="${L.badgeOpacity ?? 1}"></label>` : ''}</div>
-  <div class="field"><span class="lbl">Art &amp; stickers</span><div class="btnrow"><button class="btn" data-act="addImg">🖼 Add image</button><button class="btn" data-act="addText">T Add text</button><button class="btn" data-act="addSticker">⭐ Sticker</button><button class="btn" data-act="addLogo">🏷 Brand logo</button></div></div>
   <div class="btnrow"><button class="btn" data-act="copyStyle">Apply this style to all cards of this brand</button><button class="btn danger-btn" data-act="resetDesign">Reset design</button></div>`;
-}
-function secLayers(c) {
-  const ls = c.layout.layers;
-  return `<div class="btnrow field"><button class="btn" data-act="addImg">🖼 Image</button><button class="btn" data-act="addText">T Text</button><button class="btn" data-act="addSticker">⭐ Sticker</button><button class="btn" data-act="addLogo">🏷 Logo</button></div>
-  ${ls.length ? `<div class="layer-rows">${[...ls].reverse().map(L => `<div class="layer-row ${ui.sel === L.id ? 'on' : ''}">${layerIcon(L)}
-    <button class="nm" data-pick="${L.id}">${esc(layerName(L))}</button><span class="zone">${L.zone === 'top' ? 'OVER' : 'ART'}</span>
-    <button class="btn small" data-lact="hide" data-id="${L.id}" title="${L.hidden ? 'Show' : 'Hide'}">${L.hidden ? '🙈' : '👁'}</button>
-    <button class="btn small" data-lact="front" data-id="${L.id}" title="Up">▲</button><button class="btn small" data-lact="back" data-id="${L.id}" title="Down">▼</button>
-    <button class="btn small danger-btn" data-lact="del" data-id="${L.id}" title="Delete">🗑</button></div>`).join('')}</div>
-    <p class="help">Top of the list draws on top. <b>ART</b> layers are clipped to the art window; <b>OVER</b> layers float over the whole card.</p>`
-    : `<p class="muted">No layers yet. Add your art, then drag it into place. Tip: you can also drop or paste an image straight onto the card.</p>`}`;
 }
 function renderChecks() {
   const c = cur(); if (!c) return;
@@ -1070,8 +1334,6 @@ inspector.addEventListener('click', async e => {
   }
   if (b.dataset.brand) return apply('origin', b.dataset.brand, true);
   if (b.dataset.preset) { snap(); Object.assign(c.layout, PRESETS[b.dataset.preset]); renderStage(); renderInspector(); save(); return toast(`Style: ${b.dataset.preset}`); }
-  if (b.dataset.pick) return select(b.dataset.pick);
-  if (b.dataset.lact) return layerAction(b.dataset.lact, b.dataset.id);
   const act = b.dataset.act; if (!act || b.type === 'checkbox') return;
   if (act === 'randName') apply('name', randomName(c.type), true);
   if (act === 'dup') { const d = clone(c); d.name = c.name + ' (copy)'; d.id = uniqueCardId(d.name, P.cards); d.autoId = true; addCard(d); d.folders = [...c.folders]; toast('Duplicated'); }
@@ -1088,10 +1350,6 @@ inspector.addEventListener('click', async e => {
   if (act === 'newBrand') { const n = await promptText('New brand', 'Brand name (e.g. "Snackforce 2000")'); if (n && addBrand(n)) apply('origin', n, true); }
   if (act === 'newTag') { const n = $('#newTagIn').value.trim(); if (n) { if (!P.tags.includes(n)) P.tags.push(n); apply('tags', [...new Set([...(c.tags || []), n])], true); } }
   if (act === 'interpret') interpret();
-  if (act === 'addImg') $('#imgPick').click();
-  if (act === 'addText') addText();
-  if (act === 'addLogo') addLogo();
-  if (act === 'addSticker') stickerPicker();
   if (act === 'resetDesign' && await confirmAsk('Reset design?', 'Colors, font and banner go back to default. Your layers are kept.')) { snap(); c.layout = { ...defaultLayout(), layers: c.layout.layers }; renderStage(); renderInspector(); save(); }
   if (act === 'copyStyle') {
     const same = P.cards.filter(o => o !== c && (c.type === 'ACT' ? o.type === 'ACT' : o.origin === c.origin));
@@ -1310,7 +1568,7 @@ async function printSheet(cards, label) {
 }
 const cardPNG = (c, scale = 1) => toPNG(exportSVG(c, P.cards.indexOf(c), scale), W * scale, H * scale);
 function cardBundle(c) {
-  const assets = {}; for (const l of c.layout.layers) if (l.kind === 'image' && P.assets[l.asset]) assets[l.asset] = P.assets[l.asset];
+  const assets = {}; for (const l of c.layout.layers) for (const id of [l.asset, l.orig]) if (l.kind === 'image' && P.assets[id]) assets[id] = P.assets[id];
   const card = { ...clone(c), folders: [] };
   const brand = P.brands.find(b => b.name === c.origin) || null;
   if (brand?.logo && P.assets[brand.logo]) assets[brand.logo] = P.assets[brand.logo];
@@ -1400,7 +1658,7 @@ async function exportZip(cards = P.cards, label = P.setName) {
   try {
     await withProgress('📦 Packing your cards', async step => {
       if (opt.save) {
-        const part = cards === P.cards ? P : { ...P, cards, folders: P.folders.filter(f => cards.some(c => c.folders.includes(f.id))), assets: Object.fromEntries(Object.entries(P.assets).filter(([k]) => cards.some(c => c.layout.layers.some(l => l.asset === k)))) };
+        const part = cards === P.cards ? P : { ...P, cards, folders: P.folders.filter(f => cards.some(c => c.folders.includes(f.id))), assets: Object.fromEntries(Object.entries(P.assets).filter(([k]) => cards.some(c => c.layout.layers.some(l => l.asset === k || l.orig === k)))) };
         zip.file(`${base}.lftset.json`, JSON.stringify(part));
       }
       if (opt.data) {
@@ -1610,7 +1868,7 @@ $('#emptySet').addEventListener('click', async () => {
 // restored, downloaded as a save file, or all bundled into one archive ZIP.
 function partialProject(cards) {
   if (cards === P.cards) { gcAssets(); return clone(P); }
-  const keep = new Set([...cards.flatMap(c => c.layout.layers.map(l => l.asset)), ...P.brands.map(b => b.logo)].filter(Boolean));
+  const keep = new Set([...cards.flatMap(c => c.layout.layers.flatMap(l => [l.asset, l.orig])), ...P.brands.map(b => b.logo)].filter(Boolean));
   return clone({ ...P, cards, folders: P.folders.filter(f => cards.some(c => c.folders.includes(f.id))), assets: Object.fromEntries(Object.entries(P.assets).filter(([k]) => keep.has(k))) });
 }
 const versionList = async () => (await store.get('snaps')) || [];
@@ -1710,8 +1968,10 @@ function renderManual() {
       <li>Open a deck to see its <b>cost curve</b> and <b>brand mix</b>, and to mark it as the <b>🔴 Red</b> or <b>🔵 Blue</b> deck for the TTS game.</li>
       <li><b>🧪 Sandbox</b>: a scratch deck for random experiments. It never counts toward a deck.</li>
       <li><b>🗑 Trash</b>: deleted cards wait ${TRASH_DAYS} days. Most library actions also show <b>↶ Undo</b> for a few seconds.</li></ul>`],
-    ['art', '🎨 Art &amp; design', `<ul><li><b>🖼 Image</b>, <b>T Text</b>, <b>⭐ Sticker</b>, <b>🏷 Logo</b> add layers. Drag to move, white corners resize, yellow dot spins; pinch on touch, scroll wheel on PC.</li>
-      <li>Selected images get <b>⤢ Fill art</b>, <b>⊡ Fit art</b>, <b>✛ Center</b>, shape <b>masks</b>, and <b>☀ Bright / ◐ Contrast / 🎨 Color</b> sliders.</li>
+    ['art', '🎨 Art &amp; design', `<ul><li>The <b>tool rail</b> left of the card adds an <b>Image</b>, <b>Text</b>, <b>Shapes</b> &amp; stickers or your brand <b>Logo</b>. Drag to move, white corners resize, yellow dot spins; pinch on touch, scroll wheel on PC. Pink guides show when a layer snaps to the centre or the art window.</li>
+      <li><b>Zoom</b>: pinch, Ctrl + scroll or the zoom pill. <b>Pan</b>: the hand tool, Space + drag, or drag empty space while zoomed.</li>
+      <li><b>Layers</b> panel: drag the dots to restack, hide 👁, lock 🔒, double-click to rename, and set opacity and blend mode (Multiply, Screen, Overlay…).</li>
+      <li>The <b>dock</b> under the card changes with your selection. <b>Transform</b>: align buttons, Fill / Fit / Center, size, spin, opacity. <b>Style</b>: colour swatches, fonts, outlines, shape picker, masks and <b>✨ Remove background</b> (best on plain backgrounds; Strength tunes it, Original undoes it). <b>Adjust</b>: brightness, contrast, saturation, hue. <b>Effects</b>: drop shadow, glow, sticker outline.</li>
       <li><b>Design</b> tab: style presets, colors, gradients, fonts, holographic foil (automatic for EXE). The rules check warns when text gets hard to read.</li>
       <li><b>Brands</b> tab → Set Info: the set name printed on every card and the <b>card back</b> design.</li>
       <li>Workspace buttons (top of the editor): swap sides, change the backdrop, focus mode; drag the panel edge to resize it on PC.</li></ul>`],
@@ -1724,7 +1984,7 @@ function renderManual() {
       ['Work in a spreadsheet', 'Save &amp; Share → Spreadsheet', 'Excel template or CSV; drop it back in, stats update and art stays; or link a Google Sheet'],
       ['Undo a big mistake', 'Save &amp; Share → <b>📸 Snapshots</b>', 'Roll back to any snapshot; the Forge also keeps automatic and pre-update backups'],
     ])],
-    ['keys', '⌨ Shortcuts', table(['Keys', 'Does'], [['Ctrl/⌘ + Z · Ctrl/⌘ + Y', 'Undo · redo (editor)'], ['Arrow keys (+Shift)', 'Nudge the selected layer 1 (10) px'], ['Delete / Backspace', 'Delete the selected layer'], ['Ctrl/⌘ + D', 'Duplicate the selected layer'], ['Esc', 'Deselect / close help'], ['Ctrl/⌘ + scroll', 'Zoom the card grid'], ['Ctrl/⌘-click · Shift-click', 'Pick cards · pick a range']])],
+    ['keys', '⌨ Shortcuts', table(['Keys', 'Does'], [['Ctrl/⌘ + Z · Ctrl/⌘ + Y', 'Undo · redo (editor)'], ['Arrow keys (+Shift)', 'Nudge the selected layer 1 (10) px'], ['Delete / Backspace', 'Delete the selected layer'], ['Ctrl/⌘ + D', 'Duplicate the selected layer'], ['V · H', 'Move tool · pan tool (or hold Space)'], ['I · T · S', 'Add image · text · shape'], ['L', 'Show / hide Layers'], ['[ · ]', 'Send backward · bring forward'], ['Ctrl/⌘ + + / − / 0', 'Zoom the card in / out / fit (editor)'], ['Alt while dragging', 'Move without snapping'], ['Esc', 'Deselect / close help'], ['Ctrl/⌘ + scroll', 'Zoom the card grid'], ['Ctrl/⌘-click · Shift-click', 'Pick cards · pick a range']])],
     ['faq', '❓ Questions', `<dl><dt>Where are my cards stored?</dt><dd>In this browser on this device. Other devices and browsers don't see them until you open a save file there.</dd>
       <dt>The page says a new version is out.</dt><dd>Press <b>Reload now</b>. Your work is saved, and a backup is taken before any upgrade.</dd>
       <dt>It says the Forge is open in another tab.</dt><dd>Use one tab at a time; a tab that falls behind stops saving so it can't overwrite newer work.</dd>
@@ -1749,8 +2009,10 @@ const HELP = {
   ] },
   editor: { title: 'Designing a card', flow: 1, steps: [
     ['#stage', 'Edit right on the card', 'Tap the name, cost, HP, banner or rules text to type into it. Drag art to move it; white corners resize, the yellow dot spins.'],
-    ['#toolstrip', 'Add things', 'Your own image (with shape masks), text, stickers or your brand logo. You can also drop or paste a picture onto the card.'],
-    ['#sectabs', 'Card details', 'Stats, brand, ability, colors, gradients, holo foil and layers.'],
+    ['#toolRail', 'Tools', 'Add your own image, text, shapes & stickers or your brand logo (or drop / paste a picture onto the card). Pinch or Ctrl + scroll zooms; the hand or Space + drag pans.'],
+    ['#layersBtn', 'Layers', 'Every image, text and sticker is a layer. Drag the dots to restack, hide or lock layers, set opacity and blend modes, double-click to rename.'],
+    ['#layerBar', 'Tool options', 'Whatever you select gets its own options: align, colours, remove background, shadow, glow and sticker outlines.'],
+    ['#sectabs', 'Card details', 'Stats, brand, ability, colors, gradients and holo foil. Art layers live in the Layers panel on the canvas.'],
     ['#checks', 'Rules check', 'Warns you if the card breaks a rule or looks unbalanced.'],
     ['#edLayout', 'Your workspace', 'Swap sides, change the backdrop, or go full focus. On PC, drag the edge of the side panel to resize it.'],
     ['#shareCardBtn', 'Share one card', 'Makes a picture with the card data hidden inside. Anyone can drop it into their Forge to keep editing.'],
@@ -1895,10 +2157,6 @@ $('#prevCard').addEventListener('click', () => stepCard(-1));
 $('#nextCard').addEventListener('click', () => stepCard(1));
 $('#undoBtn').addEventListener('click', () => undoRedo(undoStack, redoStack));
 $('#redoBtn').addEventListener('click', () => undoRedo(redoStack, undoStack));
-$('#addImg').addEventListener('click', () => $('#imgPick').click());
-$('#addText').addEventListener('click', addText);
-$('#addLogo').addEventListener('click', addLogo);
-$('#addSticker').addEventListener('click', stickerPicker);
 $('#pngBtn').addEventListener('click', async () => { const c = cur(); if (c) { download(await cardPNG(c, 2), `${fileBase(c)}.png`); toast('⬇ PNG downloaded (1000×1400)'); } });
 $('#shareCardBtn').addEventListener('click', shareCard);
 $('#imgPick').addEventListener('change', e => { const f = e.target.files[0]; if (f) addImageLayer(f); e.target.value = ''; });
@@ -1918,16 +2176,29 @@ addEventListener('keydown', e => {
   if (e.key === 'Escape' && !$('#help').hidden) return closeHelp();
   const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName) || $('#modal').open;
   const mod = e.ctrlKey || e.metaKey;
-  if (ui.view !== 'editor' || typing) return;
+  if (ui.view !== 'editor' || typing || !cur()) return;
   if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? undoRedo(redoStack, undoStack) : undoRedo(undoStack, redoStack); return; }
   if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); undoRedo(redoStack, undoStack); return; }
+  if (mod && (e.key === '=' || e.key === '+')) { e.preventDefault(); return zoomAt(view.z * 1.25); }
+  if (mod && e.key === '-') { e.preventDefault(); return zoomAt(view.z * 0.8); }
+  if (mod && e.key === '0') { e.preventDefault(); return zoomAt(1); }
+  if (e.key === ' ') { e.preventDefault(); if (!tool.space) { tool.space = true; setTool(tool.name); } return; }
+  // Paint-app single-key tools.
+  if (!mod && !e.altKey) {
+    const tk = { v: () => setTool('move'), h: () => setTool('hand'), i: () => $('#imgPick').click(), t: addText, s: stickerPicker, l: () => toggleLayers() }[e.key.toLowerCase()];
+    if (tk) { e.preventDefault(); return tk(); }
+  }
   const L = selLayer(); if (!L) return;
   const step = e.shiftKey ? 10 : 1, mv = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
-  if (mv) { e.preventDefault(); snap(); L.x += mv[0]; L.y += mv[1]; updateLayerDOM(L); save(); }
+  if (mv && !L.locked) { e.preventDefault(); snap(); L.x += mv[0]; L.y += mv[1]; updateLayerDOM(L); save(); }
   else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); layerAction('del'); }
   else if (e.key === 'Escape') select(null);
-  else if (mod && e.key.toLowerCase() === 'd') { e.preventDefault(); layerAction('dup'); }
+  else if (e.key === '[' || e.key === ']') { e.preventDefault(); layerAction(e.key === ']' ? 'front' : 'back'); }
+  else if (mod && (e.key.toLowerCase() === 'd' || e.key.toLowerCase() === 'j')) { e.preventDefault(); layerAction('dup'); }
 });
+const spaceUp = () => { if (tool.space) { tool.space = false; setTool(tool.name); } };
+addEventListener('keyup', e => { if (e.key === ' ') spaceUp(); });
+addEventListener('blur', spaceUp);
 
 $('#themeBtn').addEventListener('click', () => {
   const dark = document.documentElement.dataset.theme ? document.documentElement.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
