@@ -122,6 +122,7 @@ function resetTo(p) { P = p; ui.cur = null; ui.sel = null; ui.folder = 'all'; ui
 // ---------------------------------------------------------------- views
 function setView(v) {
   ui.view = v;
+  document.body.classList.toggle('zen', !!ED.zen && v === 'editor');
   for (const s of $$('.view')) s.classList.toggle('active', s.id === 'view-' + v);
   for (const b of $$('[data-view]')) b.dataset.view === v ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current');
   if (v === 'library') renderLibrary();
@@ -609,11 +610,20 @@ function applyEditorLayout() {
   $('#stage').dataset.bg = BACKDROPS[ED.bg % BACKDROPS.length];
   document.documentElement.style.setProperty('--insp-w', clamp(ED.w, 300, 720) + 'px');
   $('#focusBtn').setAttribute('aria-pressed', !!ED.focus); $('#focusBtn').title = ED.focus ? 'Show the side panel again' : 'Focus: hide the side panel';
+  // Workspace windows: each can be minimised, and Full canvas hides everything but the card.
+  document.body.classList.toggle('zen', !!ED.zen && ui.view === 'editor');
+  $('#zenBtn').setAttribute('aria-pressed', !!ED.zen); $('#zenBtn').title = ED.zen ? 'Exit full canvas (F or Esc)' : 'Full canvas: hide everything but the card (F)';
+  $('#toolRail').classList.toggle('min', !!ED.railMin);
+  $('#layerBar').classList.toggle('min', !!ED.dockMin);
+  $('#panelTab').hidden = !(ED.focus || ED.zen);
   lsSet('forge-editor', JSON.stringify(ED));
 }
 $('#swapBtn').addEventListener('click', () => { ED.swap = !ED.swap; applyEditorLayout(); });
 $('#bgBtn').addEventListener('click', () => { ED.bg = (ED.bg + 1) % BACKDROPS.length; applyEditorLayout(); toast('Backdrop: ' + BACKDROPS[ED.bg]); });
 $('#focusBtn').addEventListener('click', () => { ED.focus = !ED.focus; applyEditorLayout(); });
+$('#zenBtn').addEventListener('click', () => toggleZen());
+$('#panelTab').addEventListener('click', () => { ED.focus = false; ED.zen = false; applyEditorLayout(); });
+function toggleZen(on = !ED.zen) { ED.zen = on; applyEditorLayout(); requestAnimationFrame(() => applyView()); toast(on ? 'Full canvas — press F or Esc to bring the panels back' : 'Panels are back'); }
 $('#splitter').addEventListener('pointerdown', e => {
   e.preventDefault(); const sp = e.currentTarget; sp.setPointerCapture(e.pointerId);
   const box = $('#view-editor').getBoundingClientRect();
@@ -707,9 +717,12 @@ const RAIL = [
   ['move', I.move, 'Move', 'Move & select (V)'], ['hand', I.hand, 'Pan', 'Pan the canvas (H, or hold Space)'], null,
   ['addImg', I.image, 'Image', 'Add an image (I)'], ['addText', I.text, 'Text', 'Add text (T)'], ['addSticker', I.shapes, 'Shapes', 'Shapes & stickers (S)'], ['addLogo', I.logo, 'Logo', 'Brand logo'],
 ];
-$('#toolRail').innerHTML = RAIL.map(r => !r ? '<span class="rail-sep" aria-hidden="true"></span>'
+$('#toolRail').innerHTML = `<button type="button" class="rail-min" data-railmin title="Minimise / expand the tools" aria-label="Minimise or expand the tools">${I.minus}</button>` + RAIL.map(r => !r ? '<span class="rail-sep" aria-hidden="true"></span>'
   : `<button type="button" class="tool" ${r[0] === 'move' || r[0] === 'hand' ? `data-tool="${r[0]}" aria-pressed="${r[0] === 'move'}"` : `id="${r[0]}"`} title="${r[3]}" aria-label="${r[3]}">${r[1]}<small>${r[2]}</small></button>`).join('');
-$('#toolRail').addEventListener('click', e => { const b = e.target.closest('[data-tool]'); if (b) setTool(b.dataset.tool); });
+$('#toolRail').addEventListener('click', e => {
+  if (e.target.closest('[data-railmin]')) { ED.railMin = !ED.railMin; return applyEditorLayout(); }
+  const b = e.target.closest('[data-tool]'); if (b) setTool(b.dataset.tool);
+});
 $('#addImg').addEventListener('click', () => $('#imgPick').click());
 $('#addText').addEventListener('click', () => addText());
 $('#addLogo').addEventListener('click', () => addLogo());
@@ -998,13 +1011,14 @@ function swatchRow(c, field, value) {
   return `<div class="swatches">${list.map(v => `<button type="button" class="sw" data-sw="${v}" data-swf="${field}" style="--c:${v}" title="${v}" aria-label="Colour ${v}" aria-pressed="${String(value).toLowerCase() === v}"></button>`).join('')}
     <label class="sw sw-any" title="Any colour"><input type="color" data-lf="${field}" value="${esc(/^#[0-9a-f]{6}$/i.test(value) ? value : '#ffffff')}" aria-label="Pick any colour"></label></div>`;
 }
+const dockMinBtn = () => `<button type="button" class="dk-ic dock-min" data-dockmin title="${ED.dockMin ? 'Expand the options' : 'Minimise the options'}" aria-label="${ED.dockMin ? 'Expand the options' : 'Minimise the options'}" aria-expanded="${!ED.dockMin}">${ED.dockMin ? I.up : I.down}</button>`;
 const dk = (a, icon, title, pressed) => `<button type="button" class="dk-ic" data-la="${a}" title="${title}" aria-label="${title}"${pressed != null ? ` aria-pressed="${pressed}"` : ''}>${icon}</button>`;
 const dkBtn = (a, icon, label, extra = '') => `<button type="button" class="dk-btn${extra}" data-la="${a}">${icon}<span>${label}</span></button>`;
 function renderLayerBar() {
   const c = cur(), L = selLayer(), bar = $('#layerBar');
   if (!c) { bar.innerHTML = ''; return; }
   if (!L) {
-    bar.innerHTML = `<div class="dock-hint"><span><b>Tap text on the card</b> to type into it</span><span><b>Tap art</b> to grab it · corners resize · yellow dot spins</span><span><b>Pinch</b> or <b>Ctrl + scroll</b> to zoom · <b>Space + drag</b> to pan</span></div>`;
+    bar.innerHTML = `<div class="dock-hint">${dockMinBtn()}<span><b>Tap text on the card</b> to type into it</span><span><b>Tap art</b> to grab it · corners resize · yellow dot spins</span><span><b>Pinch</b> or <b>Ctrl + scroll</b> to zoom · <b>Space + drag</b> to pan</span></div>`;
     return;
   }
   const tabs = Object.keys(DOCK_TABS).filter(k => k !== 'adjust' || L.kind === 'image');
@@ -1013,7 +1027,7 @@ function renderLayerBar() {
     <button type="button" class="zone-pill" data-la="zone" title="Clip inside the art window, or float over the whole card">${L.zone === 'top' ? 'Over card' : 'In art window'}</button>
     <span class="spacer"></span>
     <span class="dk-group">${dk('flip', I.flip, 'Mirror')}${dk('back', I.down, 'Send backward  [')}${dk('front', I.up, 'Bring forward  ]')}${dk('dup', I.dup, 'Duplicate  Ctrl+D')}${dk('lock', L.locked ? I.lock : I.unlock, L.locked ? 'Unlock' : 'Lock', !!L.locked)}${dk('del', I.trash, 'Delete  Del')}</span>
-    <button type="button" class="dk-done" data-la="done" title="Done (Esc)">${I.check}<span>Done</span></button></div>`;
+    ${dockMinBtn()}<button type="button" class="dk-done" data-la="done" title="Done (Esc)">${I.check}<span>Done</span></button></div>`;
   if (L.locked) { bar.innerHTML = head + `<div class="dock-body"><p class="dock-note">${I.lock} Locked, so it can't be nudged by accident. Unlock it to edit.</p></div>`; return; }
   const tabBar = `<div class="dock-tabs" role="tablist">${tabs.map(k => `<button type="button" role="tab" data-dtab="${k}" aria-selected="${k === tab}">${DOCK_TABS[k]}</button>`).join('')}</div>`;
   bar.innerHTML = head + tabBar + `<div class="dock-body">${dockBody(c, L, tab)}</div>`;
@@ -1073,6 +1087,7 @@ function layerField(e) {
 }
 for (const box of [$('#layerBar'), $('#layersPop')]) { box.addEventListener('input', layerField); box.addEventListener('change', layerField); }
 $('#layerBar').addEventListener('click', e => {
+  if (e.target.closest('[data-dockmin]')) { ED.dockMin = !ED.dockMin; applyEditorLayout(); return renderLayerBar(); }
   const b = e.target.closest('[data-la],[data-dtab],[data-sw],[data-setshape],[data-setfx]'); if (!b) return;
   const L = selLayer(), d = b.dataset;
   if (d.la) return layerAction(d.la);
@@ -1969,6 +1984,7 @@ function renderManual() {
       <li><b>🧪 Sandbox</b>: a scratch deck for random experiments. It never counts toward a deck.</li>
       <li><b>🗑 Trash</b>: deleted cards wait ${TRASH_DAYS} days. Most library actions also show <b>↶ Undo</b> for a few seconds.</li></ul>`],
     ['art', '🎨 Art &amp; design', `<ul><li>The <b>tool rail</b> left of the card adds an <b>Image</b>, <b>Text</b>, <b>Shapes</b> &amp; stickers or your brand <b>Logo</b>. Drag to move, white corners resize, yellow dot spins; pinch on touch, scroll wheel on PC. Pink guides show when a layer snaps to the centre or the art window.</li>
+      <li><b>Windows</b>: minimise the tool rail (top dash) or the options dock (arrow), hide the side panel with the focus button in the editor bar, or go <b>Full canvas</b> (F). <b>Details ›</b> brings the panels back.</li>
       <li><b>Zoom</b>: pinch, Ctrl + scroll or the zoom pill. <b>Pan</b>: the hand tool, Space + drag, or drag empty space while zoomed.</li>
       <li><b>Layers</b> panel: drag the dots to restack, hide 👁, lock 🔒, double-click to rename, and set opacity and blend mode (Multiply, Screen, Overlay…).</li>
       <li>The <b>dock</b> under the card changes with your selection. <b>Transform</b>: align buttons, Fill / Fit / Center, size, spin, opacity. <b>Style</b>: colour swatches, fonts, outlines, shape picker, masks and <b>✨ Remove background</b> (best on plain backgrounds; Strength tunes it, Original undoes it). <b>Adjust</b>: brightness, contrast, saturation, hue. <b>Effects</b>: drop shadow, glow, sticker outline.</li>
@@ -1984,7 +2000,7 @@ function renderManual() {
       ['Work in a spreadsheet', 'Save &amp; Share → Spreadsheet', 'Excel template or CSV; drop it back in, stats update and art stays; or link a Google Sheet'],
       ['Undo a big mistake', 'Save &amp; Share → <b>📸 Snapshots</b>', 'Roll back to any snapshot; the Forge also keeps automatic and pre-update backups'],
     ])],
-    ['keys', '⌨ Shortcuts', table(['Keys', 'Does'], [['Ctrl/⌘ + Z · Ctrl/⌘ + Y', 'Undo · redo (editor)'], ['Arrow keys (+Shift)', 'Nudge the selected layer 1 (10) px'], ['Delete / Backspace', 'Delete the selected layer'], ['Ctrl/⌘ + D', 'Duplicate the selected layer'], ['V · H', 'Move tool · pan tool (or hold Space)'], ['I · T · S', 'Add image · text · shape'], ['L', 'Show / hide Layers'], ['[ · ]', 'Send backward · bring forward'], ['Ctrl/⌘ + + / − / 0', 'Zoom the card in / out / fit (editor)'], ['Alt while dragging', 'Move without snapping'], ['Esc', 'Deselect / close help'], ['Ctrl/⌘ + scroll', 'Zoom the card grid'], ['Ctrl/⌘-click · Shift-click', 'Pick cards · pick a range']])],
+    ['keys', '⌨ Shortcuts', table(['Keys', 'Does'], [['Ctrl/⌘ + Z · Ctrl/⌘ + Y', 'Undo · redo (editor)'], ['Arrow keys (+Shift)', 'Nudge the selected layer 1 (10) px'], ['Delete / Backspace', 'Delete the selected layer'], ['Ctrl/⌘ + D', 'Duplicate the selected layer'], ['V · H', 'Move tool · pan tool (or hold Space)'], ['I · T · S', 'Add image · text · shape'], ['L', 'Show / hide Layers'], ['F', 'Full canvas: hide everything but the card (F or Esc to exit)'], ['[ · ]', 'Send backward · bring forward'], ['Ctrl/⌘ + + / − / 0', 'Zoom the card in / out / fit (editor)'], ['Alt while dragging', 'Move without snapping'], ['Esc', 'Deselect / close help'], ['Ctrl/⌘ + scroll', 'Zoom the card grid'], ['Ctrl/⌘-click · Shift-click', 'Pick cards · pick a range']])],
     ['faq', '❓ Questions', `<dl><dt>Where are my cards stored?</dt><dd>In this browser on this device. Other devices and browsers don't see them until you open a save file there.</dd>
       <dt>The page says a new version is out.</dt><dd>Press <b>Reload now</b>. Your work is saved, and a backup is taken before any upgrade.</dd>
       <dt>It says the Forge is open in another tab.</dt><dd>Use one tab at a time; a tab that falls behind stops saving so it can't overwrite newer work.</dd>
@@ -2185,10 +2201,11 @@ addEventListener('keydown', e => {
   if (e.key === ' ') { e.preventDefault(); if (!tool.space) { tool.space = true; setTool(tool.name); } return; }
   // Paint-app single-key tools.
   if (!mod && !e.altKey) {
-    const tk = { v: () => setTool('move'), h: () => setTool('hand'), i: () => $('#imgPick').click(), t: addText, s: stickerPicker, l: () => toggleLayers() }[e.key.toLowerCase()];
+    const tk = { f: () => toggleZen(), v: () => setTool('move'), h: () => setTool('hand'), i: () => $('#imgPick').click(), t: addText, s: stickerPicker, l: () => toggleLayers() }[e.key.toLowerCase()];
     if (tk) { e.preventDefault(); return tk(); }
   }
-  const L = selLayer(); if (!L) return;
+  const L = selLayer();
+  if (!L) { if (e.key === 'Escape' && ED.zen) toggleZen(false); return; }
   const step = e.shiftKey ? 10 : 1, mv = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
   if (mv && !L.locked) { e.preventDefault(); snap(); L.x += mv[0]; L.y += mv[1]; updateLayerDOM(L); save(); }
   else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); layerAction('del'); }

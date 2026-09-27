@@ -744,3 +744,23 @@ body.dragging .view.active .drop-hint { display: flex; }
   .layers-pop { max-height: calc(100% - 70px); }
 }
 @media (min-width: 761px) { body:has(#view-editor.active) .help-fab { left: auto; right: 16px; } }
+
+/* ---------- minimisable workspace windows + full canvas ---------- */
+.rail-min { border: 0; background: none; color: var(--glass-muted); height: 20px; border-radius: 8px; display: grid; place-items: center; cursor: pointer; }
+.rail-min:hover { background: var(--glass-hover); color: var(--glass-text); }
+.rail-min .ico { width: 14px; height: 14px; }
+.rail.min .tool { width: 40px; padding: 7px 0; }
+.rail.min .tool small { display: none; }
+.dock .dock-min { flex-shrink: 0; }
+.dock-hint { position: relative; align-items: center; }
+.dock.min .dock-tabs, .dock.min .dock-body { display: none; }
+.dock.min .dock-head { border-radius: 16px; border-bottom: 1px solid var(--glass-line); box-shadow: var(--glass-shadow); }
+.dock.min .dock-hint > span { display: none; }
+.dock.min .dock-hint { justify-content: flex-start; padding: 4px 8px; width: max-content; }
+.dock.min .dock-hint::after { content: "Tips"; font-size: 12px; font-weight: 600; }
+.panel-tab { position: absolute; left: 12px; bottom: 12px; z-index: 5; }
+body.zen .topbar, body.zen .bottombar, body.zen .app-foot, body.zen .help-fab, body.zen .phone-hint, body.zen #view-editor .inspector { display: none !important; }
+body.zen main { padding-top: 6px; }
+body.zen #view-editor.active { grid-template-columns: minmax(0, 1fr); }
+body.zen #cardSvg { height: calc(100dvh - 200px); max-height: none; }
+body.zen { padding-bottom: 0; }
