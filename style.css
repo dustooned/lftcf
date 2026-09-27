@@ -208,7 +208,8 @@ textarea.inline-edit { font-weight: 500; }
 .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .stepper { display: inline-flex; align-items: stretch; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
 .stepper button { width: 38px; min-height: 36px; border: 0; background: linear-gradient(var(--btn1), var(--btn2)); cursor: pointer; font-size: 18px; font-weight: bold; color: var(--btn-text); }
-.stepper output { min-width: 44px; display: grid; place-items: center; font-weight: bold; font-size: 17px; background: var(--panel); border-left: 1px solid var(--line2); border-right: 1px solid var(--line2); }
+.stepper input { width: 56px; min-height: 36px; border: 0; border-radius: 0; text-align: center; font-weight: bold; font-size: 17px; background: var(--panel); color: var(--text); border-left: 1px solid var(--line2); border-right: 1px solid var(--line2); padding: 0 4px; -moz-appearance: textfield; }
+.stepper input::-webkit-outer-spin-button, .stepper input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip {
   border: 1px solid var(--line); background: var(--chip); border-radius: 14px; padding: 5px 11px; cursor: pointer; font-size: 12px; min-height: 30px;
@@ -764,3 +765,5 @@ body.zen main { padding-top: 6px; }
 body.zen #view-editor.active { grid-template-columns: minmax(0, 1fr); }
 body.zen #cardSvg { height: calc(100dvh - 200px); max-height: none; }
 body.zen { padding-bottom: 0; }
+
+.dock .dk-num { width: 72px; text-align: right; min-height: 34px; border-radius: 10px; border: 1px solid var(--glass-line); background: var(--glass); color: var(--glass-text); padding: 4px 8px; font: 600 13px var(--ws-font); }

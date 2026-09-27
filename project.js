@@ -22,6 +22,7 @@ export function cleanLayer(L) {
   if (!L || !['image', 'text', 'shape', 'logo'].includes(L.kind)) return null;
   const o = { id: SAFE_ID.test(L.id) ? L.id : newId(), kind: L.kind, x: num(L.x, 250), y: num(L.y, 301), scale: clamp(num(L.scale, 1), 0.01, 20), rot: num(L.rot, 0), opacity: clamp(num(L.opacity, 1), 0, 1), zone: L.zone === 'top' ? 'top' : 'art', flip: !!L.flip, hidden: !!L.hidden };
   if (L.locked) o.locked = true;
+  for (const k of ['sx', 'sy']) if (L[k] != null && num(L[k], 1) !== 1) o[k] = clamp(num(L[k], 1), 0.02, 50);
   if (L.label) o.label = String(L.label).slice(0, 40);
   if (BLENDS[L.blend] && L.blend !== 'normal') o.blend = L.blend;
   if (LAYER_FX[L.fx] && L.fx !== 'none') Object.assign(o, { fx: L.fx, fxColor: hex(L.fxColor, ''), fxSize: clamp(num(L.fxSize, 1), 0.2, 3) });

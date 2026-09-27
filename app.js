@@ -748,7 +748,7 @@ const startPan = e => ({ mode: 'pan', x0: e.clientX, y0: e.clientY, cx0: view.cx
 const midC = () => { const [a, b] = [...ptsC.values()]; return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, d: Math.max(1, dist(a, b)) }; };
 // Axis-aligned half-size of a layer after scale + rotation, for snapping and the align buttons.
 function extents(L) {
-  const { hw, hh } = layerBox(L), r = (L.rot || 0) * Math.PI / 180, s = L.scale, c = Math.abs(Math.cos(r)), n = Math.abs(Math.sin(r));
+  const { hw: bw, hh: bh } = layerBox(L), hw = bw * (L.sx ?? 1), hh = bh * (L.sy ?? 1), r = (L.rot || 0) * Math.PI / 180, s = L.scale, c = Math.abs(Math.cos(r)), n = Math.abs(Math.sin(r));
   return { ex: (hw * c + hh * n) * s, ey: (hw * n + hh * c) * s };
 }
 // Smart guides: snap the layer's centre or edges to the card centre and the art window, and
@@ -786,7 +786,8 @@ svg.addEventListener('pointerdown', e => {
   const h = e.target.closest('[data-handle]');
   if (h && L && !L.locked) {
     snap(); const p = pts.get(e.pointerId);
-    gest = h.dataset.handle === 'rotate' ? { mode: 'rotate' } : { mode: 'scale', d0: Math.max(1, dist(L, p)), s0: L.scale };
+    const kind = h.dataset.handle;
+    gest = kind === 'rotate' ? { mode: 'rotate' } : { mode: kind === 'scale' ? 'scale' : kind, d0: Math.max(1, dist(L, p)), s0: L.scale, sx0: L.sx ?? 1, sy0: L.sy ?? 1 };
     return;
   }
   const g = e.target.closest('[data-layer]');
@@ -821,8 +822,17 @@ svg.addEventListener('pointermove', e => {
     if (!gest.moved) { if (dist(p, gest.p0) < 3 / view.z) return; snap(); gest.moved = true; }
     L.x = gest.x0 + p.x - gest.p0.x; L.y = gest.y0 + p.y - gest.p0.y;
     snapMove(L, e.altKey);
-  } else if (gest.mode === 'scale') {
-    L.scale = clamp(gest.s0 * dist(L, p) / gest.d0, 0.05, 8);
+  } else if (gest.mode === 'scale' || gest.mode === 'sx' || gest.mode === 'sy') {
+    // Corners keep proportions; hold Shift for a free transform. Side handles stretch one way.
+    const { hw, hh } = layerBox(L), r = (L.rot || 0) * Math.PI / 180, dx = p.x - L.x, dy = p.y - L.y;
+    const lx = Math.abs(dx * Math.cos(r) + dy * Math.sin(r)), ly = Math.abs(-dx * Math.sin(r) + dy * Math.cos(r));
+    const free = gest.mode !== 'scale' || e.shiftKey;
+    if (!free) Object.assign(L, { scale: clamp(gest.s0 * dist(L, p) / gest.d0, 0.05, 8), sx: gest.sx0, sy: gest.sy0 });
+    else {
+      L.scale = gest.s0;
+      if (gest.mode !== 'sy') L.sx = clamp(lx / (hw * L.scale), 0.02, 50);
+      if (gest.mode !== 'sx') L.sy = clamp(ly / (hh * L.scale), 0.02, 50);
+    }
   } else if (gest.mode === 'rotate') {
     let r = ang(L, p) + 90;
     if (e.shiftKey) r = Math.round(r / 15) * 15; else if (Math.abs(normDeg(r)) < 4) r = 0;
@@ -1036,7 +1046,10 @@ function dockBody(c, L, tab) {
   if (tab === 'transform') return `<div class="dock-row"><span class="dk-group">${dk('alignL', I.alignL, 'Align left')}${dk('alignCH', I.alignCH, 'Centre horizontally')}${dk('alignR', I.alignR, 'Align right')}${dk('alignT', I.alignT, 'Align top')}${dk('alignCV', I.alignCV, 'Centre vertically')}${dk('alignB', I.alignB, 'Align bottom')}</span>
       <span class="dock-note">to the ${L.zone === 'top' ? 'card' : 'art window'}</span><span class="spacer"></span>
       ${L.kind === 'image' ? dkBtn('fill', I.fill, 'Fill art') + dkBtn('fit', I.fit, 'Fit art') : ''}${dkBtn('center', I.center, 'Center')}</div>
-    <div class="sliders">${slider('scale', 'Size', 0.05, 4, 0.01, L.scale)}${slider('rot', 'Spin', -180, 180, 1, L.rot || 0)}${slider('opacity', 'Opacity', 0.05, 1, 0.01, L.opacity ?? 1)}</div>`;
+    <div class="sliders">${slider('scale', 'Size', 0.05, 4, 0.01, L.scale)}${slider('rot', 'Spin', -180, 180, 1, L.rot || 0)}${slider('opacity', 'Opacity', 0.05, 1, 0.01, L.opacity ?? 1)}</div>
+    <div class="dock-row"><label class="dk-field"><span>W</span><input type="number" class="dk-num" data-lf="wpct" value="${Math.round(L.scale * (L.sx ?? 1) * 100)}" min="1" max="2000" aria-label="Width %"><span>%</span></label>
+      <label class="dk-field"><span>H</span><input type="number" class="dk-num" data-lf="hpct" value="${Math.round(L.scale * (L.sy ?? 1) * 100)}" min="1" max="2000" aria-label="Height %"><span>%</span></label>
+      ${(L.sx ?? 1) !== 1 || (L.sy ?? 1) !== 1 ? dkBtn('unstretch', I.restore, 'Keep proportions') : '<span class="dock-note">Drag a corner to resize · <b>Shift</b> + corner or a side handle to stretch</span>'}</div>`;
   if (tab === 'adjust') return `<div class="sliders">${slider('bright', 'Brightness', 0.2, 2, 0.05, L.bright ?? 1)}${slider('contrast', 'Contrast', 0.2, 2, 0.05, L.contrast ?? 1)}${slider('sat', 'Saturation', 0, 2, 0.05, L.sat ?? 1)}${slider('hue', 'Hue shift', -180, 180, 1, L.hue || 0)}</div>
     <div class="dock-row">${dkBtn('resetLook', I.restore, 'Reset adjustments')}</div>`;
   if (tab === 'fx') {
@@ -1070,6 +1083,13 @@ function layerField(e) {
   const L = selLayer(), el = e.target, k = el.dataset.lf; if (!L || !k) return;
   const out = el.parentElement?.querySelector(`[data-out="${k}"]`); if (out) out.textContent = FMT[k](+el.value);
   if (k === 'cutTol') { if (e.type === 'change') { L.cutTol = +el.value; cutOut(L); } return; }
+  // Exact W / H %: typed, committed on Enter or leaving the box. Changing one stretches that axis.
+  if (k === 'wpct' || k === 'hpct') {
+    if (e.type !== 'change') return;
+    const v = clamp(+el.value || 100, 1, 2000) / 100; snap();
+    if (k === 'wpct') L.sx = v / L.scale; else L.sy = v / L.scale;
+    renderStage(); renderLayerBar(); save(); return;
+  }
   if (e.type === 'change' && el.type === 'range') return renderLayersPop();
   if (e.type === 'change') return;
   snap();
@@ -1105,7 +1125,9 @@ function layerAction(a, id = ui.sel) {
   if (a === 'done') return select(null);
   if (a === 'cutout') return cutOut(L);
   snap();
+  if (a === 'unstretch') { const k = Math.sqrt((L.sx ?? 1) * (L.sy ?? 1)); L.scale *= k; delete L.sx; delete L.sy; }
   if (a === 'fill' || a === 'fit') {
+    delete L.sx; delete L.sy;
     const pick = a === 'fill' ? Math.max : Math.min;
     Object.assign(L, { zone: 'art', rot: 0, x: ART.x + ART.w / 2, y: ART.y + ART.h / 2, scale: pick(ART.w / L.w, ART.h / L.h) });
   }
@@ -1221,7 +1243,7 @@ function addText() { addLayer({ kind: 'text', text: 'Your text', color: '#ffffff
 
 // ---------------------------------------------------------------- editor: inspector
 const segBtn = (f, v, label, curV) => `<button type="button" data-f="${f}" data-v="${esc(v)}" aria-pressed="${String(curV) === String(v)}">${label}</button>`;
-const stepper = (f, v, label) => `<div class="stepper" role="group" aria-label="${label}"><button type="button" data-f="${f}" data-step="-1" aria-label="less">−</button><output>${v ?? 0}</output><button type="button" data-f="${f}" data-step="1" aria-label="more">+</button></div>`;
+const stepper = (f, v, label) => `<div class="stepper" role="group" aria-label="${label}"><button type="button" data-f="${f}" data-step="-1" aria-label="less">−</button><input type="number" inputmode="numeric" data-num="${f}" value="${v ?? 0}" min="${(LIMITS[f.split('.').pop()] || [0, 99])[0]}" max="${(LIMITS[f.split('.').pop()] || [0, 99])[1]}" aria-label="${label}"><button type="button" data-f="${f}" data-step="1" aria-label="more">+</button></div>`;
 const getPath = (o, p) => p.split('.').reduce((a, k) => a?.[k], o);
 function setPath(o, p, v) { const ks = p.split('.'), last = ks.pop(); const t = ks.reduce((a, k) => a[k] ||= {}, o); t[last] = v; }
 const compatible = (host, b) => b.type === 'CHA' && host.type === 'CHA' && host !== b && ((host.origin !== 'Unassigned' && host.origin === b.origin) || (host.partners || []).some(p => p === b.name || p === b.origin || (b.tags || []).includes(p)));
@@ -1382,6 +1404,8 @@ inspector.addEventListener('input', e => {
 });
 inspector.addEventListener('change', e => {
   const el = e.target;
+  // Typed stepper values (cost, HP, amounts): commit on Enter / leaving the box, clamped to the rules.
+  if (el.dataset.num) { const f = el.dataset.num, lim = LIMITS[f.split('.').pop()] || [0, 99]; return apply(f, clamp(Math.round(+el.value || 0), ...lim), true); }
   if (el.dataset.grad) { snap(); const k = el.dataset.grad + '2'; cur().layout[k] = el.checked ? GRAD_DEFAULT[el.dataset.grad] : ''; renderStage(); renderInspector(); save(); return; }
   if (el.dataset.act === 'autoAccent') { snap(); cur().layout.accent = el.checked ? '' : accentFor(cur()); renderStage(); renderInspector(); save(); return; }
   if (!el.dataset.f) return;
@@ -1983,7 +2007,7 @@ function renderManual() {
       <li>Open a deck to see its <b>cost curve</b> and <b>brand mix</b>, and to mark it as the <b>🔴 Red</b> or <b>🔵 Blue</b> deck for the TTS game.</li>
       <li><b>🧪 Sandbox</b>: a scratch deck for random experiments. It never counts toward a deck.</li>
       <li><b>🗑 Trash</b>: deleted cards wait ${TRASH_DAYS} days. Most library actions also show <b>↶ Undo</b> for a few seconds.</li></ul>`],
-    ['art', '🎨 Art &amp; design', `<ul><li>The <b>tool rail</b> left of the card adds an <b>Image</b>, <b>Text</b>, <b>Shapes</b> &amp; stickers or your brand <b>Logo</b>. Drag to move, white corners resize, yellow dot spins; pinch on touch, scroll wheel on PC. Pink guides show when a layer snaps to the centre or the art window.</li>
+    ['art', '🎨 Art &amp; design', `<ul><li>The <b>tool rail</b> left of the card adds an <b>Image</b>, <b>Text</b>, <b>Shapes</b> &amp; stickers or your brand <b>Logo</b>. Drag to move, white corners resize (keeping proportions), square side handles stretch one way, <b>Shift</b> + corner stretches freely, yellow dot spins; pinch on touch, scroll wheel on PC. Exact <b>W / H %</b> live under Transform. Pink guides show when a layer snaps to the centre or the art window.</li>
       <li><b>Windows</b>: minimise the tool rail (top dash) or the options dock (arrow), hide the side panel with the focus button in the editor bar, or go <b>Full canvas</b> (F). <b>Details ›</b> brings the panels back.</li>
       <li><b>Zoom</b>: pinch, Ctrl + scroll or the zoom pill. <b>Pan</b>: the hand tool, Space + drag, or drag empty space while zoomed.</li>
       <li><b>Layers</b> panel: drag the dots to restack, hide 👁, lock 🔒, double-click to rename, and set opacity and blend mode (Multiply, Screen, Overlay…).</li>

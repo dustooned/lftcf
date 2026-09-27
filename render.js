@@ -85,7 +85,8 @@ export function layerBox(L) {
   const longest = Math.max(1, ...lines.map(l => l.length));
   return { hw: Math.max(20, longest * L.size * 0.3), hh: Math.max(14, lines.length * L.size * 1.15 / 2) };
 }
-export const layerTransform = L => `translate(${L.x.toFixed(1)} ${L.y.toFixed(1)}) rotate(${(L.rot || 0).toFixed(1)}) scale(${((L.flip ? -1 : 1) * L.scale).toFixed(3)} ${L.scale.toFixed(3)})`;
+// scale = overall size; sx / sy = free-transform stretch on top (1 = no stretch).
+export const layerTransform = L => `translate(${L.x.toFixed(1)} ${L.y.toFixed(1)}) rotate(${(L.rot || 0).toFixed(1)}) scale(${((L.flip ? -1 : 1) * L.scale * (L.sx ?? 1)).toFixed(3)} ${(L.scale * (L.sy ?? 1)).toFixed(3)})`;
 
 function maskShape(L) {
   const r = Math.min(L.w, L.h) / 2;
@@ -142,15 +143,18 @@ function layerMarkup(L, ctx, c, ghost) {
 // k = 1 / canvas zoom, so handles stay finger-sized however far the canvas is zoomed in.
 export function handlesMarkup(L, k = 1) {
   if (!L || L.hidden) return '';
-  const { hw, hh } = layerBox(L), s = L.scale, r = (L.rot || 0) * Math.PI / 180, cos = Math.cos(r), sin = Math.sin(r);
+  const { hw: bw, hh: bh } = layerBox(L), hw = bw * (L.sx ?? 1), hh = bh * (L.sy ?? 1), s = L.scale, r = (L.rot || 0) * Math.PI / 180, cos = Math.cos(r), sin = Math.sin(r);
   const P = (lx, ly) => [L.x + lx * cos - ly * sin, L.y + lx * sin + ly * cos];
   const corners = [[-hw * s, -hh * s], [hw * s, -hh * s], [hw * s, hh * s], [-hw * s, hh * s]].map(p => P(...p));
   const box = `<polygon points="${corners.map(p => p.map(v => v.toFixed(1)).join(',')).join(' ')}" fill="none" stroke="${L.locked ? '#8a8fa8' : '#2f7bff'}" stroke-width="${(2.5 * k).toFixed(2)}" stroke-dasharray="${L.locked ? `${6 * k} ${5 * k}` : 'none'}" pointer-events="none"/>`;
   if (L.locked) return box;
   const top = P(0, -hh * s), rot = [top[0] + 46 * k * sin, top[1] - 46 * k * cos];
   const dot = (p, kind, fill) => `<circle data-handle="${kind}" cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${(28 * k).toFixed(1)}" fill="transparent"/><circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${(10 * k).toFixed(1)}" fill="${fill}" stroke="#2f7bff" stroke-width="${(2.5 * k).toFixed(2)}" pointer-events="none"/>`;
+  // Side handles stretch one way only (smaller, square, like design apps).
+  const side = (p, kind) => `<circle data-handle="${kind}" cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${(22 * k).toFixed(1)}" fill="transparent"/><rect x="${(p[0] - 7 * k).toFixed(1)}" y="${(p[1] - 7 * k).toFixed(1)}" width="${(14 * k).toFixed(1)}" height="${(14 * k).toFixed(1)}" rx="${(3 * k).toFixed(1)}" fill="#ffffff" stroke="#2f7bff" stroke-width="${(2.5 * k).toFixed(2)}" pointer-events="none"/>`;
+  const sides = [[P(-hw * s, 0), 'sx'], [P(hw * s, 0), 'sx'], [P(0, hh * s), 'sy']].map(([p, kind]) => side(p, kind)).join('');
   return `${box}<line x1="${top[0].toFixed(1)}" y1="${top[1].toFixed(1)}" x2="${rot[0].toFixed(1)}" y2="${rot[1].toFixed(1)}" stroke="#2f7bff" stroke-width="${(2.5 * k).toFixed(2)}" pointer-events="none"/>
-  ${corners.map(p => dot(p, 'scale', '#ffffff')).join('')}${dot(rot, 'rotate', '#ffda52')}`;
+  ${sides}${corners.map(p => dot(p, 'scale', '#ffffff')).join('')}${dot(rot, 'rotate', '#ffda52')}`;
 }
 
 // Tap targets for editing the card's own text in place (editor only, never exported).

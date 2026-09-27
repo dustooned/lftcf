@@ -2,12 +2,16 @@
 // can say which build they're on and anyone can find it again (the lftcf repo tags each one).
 // Bump SAVE_FORMAT only when the saved data shape changes in a way older Forges can't read,
 // and add a migration in upgrade().
-export const VERSION = '0.8.1';
+export const VERSION = '0.8.2';
 export const CODENAME = 'Studio';
 export const RELEASED = '2026-09-27';
 export const SAVE_FORMAT = 1;
 
 export const CHANGELOG = [
+  { v: '0.8.2', name: 'Studio', date: '2026-09-27', notes: [
+    'Free transform: corners keep proportions, Shift + corner or the new side handles stretch, and Transform has exact W / H %.',
+    'Type cost, HP and amounts straight into the number between − and +.',
+  ] },
   { v: '0.8.1', name: 'Studio', date: '2026-09-27', notes: [
     'Minimise the tool rail or the options dock, and ⛶ Full canvas (F) hides everything but the card. Details › brings the panels back.',
     'Tidied the editor: layers live only in the Layers panel, and art is added from the tool rail.',
