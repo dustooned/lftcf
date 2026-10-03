@@ -2,12 +2,16 @@
 // can say which build they're on and anyone can find it again (the lftcf repo tags each one).
 // Bump SAVE_FORMAT only when the saved data shape changes in a way older Forges can't read,
 // and add a migration in upgrade().
-export const VERSION = '0.8.2';
+export const VERSION = '0.8.3';
 export const CODENAME = 'Studio';
-export const RELEASED = '2026-09-27';
+export const RELEASED = '2026-10-02';
 export const SAVE_FORMAT = 1;
 
 export const CHANGELOG = [
+  { v: '0.8.3', name: 'Studio', date: '2026-10-02', notes: [
+    'Ability symbols on the card: a waving hand for HEY, I’M HERE!, Zz for NAP TIEM!, stink lines for BIG STINK!. They sit beside the banner, which can now carry a character’s own ability name. Turn them off per card with layout.icon = false.',
+    'Drag a save file in from your desktop and, when it only brings new cards, it merges straight away with ↶ Undo. If it would overwrite cards you already have, you still get the Merge / Replace question.',
+  ] },
   { v: '0.8.2', name: 'Studio', date: '2026-09-27', notes: [
     'Free transform: corners keep proportions, Shift + corner or the new side handles stretch, and Transform has exact W / H %.',
     'Type cost, HP and amounts straight into the number between − and +.',

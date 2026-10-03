@@ -1767,16 +1767,17 @@ INTO THE SCRIPTED TTS MOD
 `;
 
 // ---------------------------------------------------------------- import
-async function importFiles(files) {
+// `dropped` = files dragged in from the desktop: a save with no overlapping cards merges straight away (↶ Undo).
+async function importFiles(files, dropped = false) {
   for (const f of files) {
     const n = f.name.toLowerCase();
     try {
-      if (n.endsWith('.zip')) await importZip(f);
+      if (n.endsWith('.zip')) await importZip(f, dropped);
       else if (n.endsWith('.csv')) await importRules(parseCSV(await f.text()), f.name);
       else if (/\.(xlsx|xls|ods)$/.test(n)) await importRules(await readSheetFile(f), f.name);
       else if (n.endsWith('.json')) {
         const o = JSON.parse(await f.text());
-        if (o.format === 'lft-forge') await importProject(o, f.name);
+        if (o.format === 'lft-forge') await importProject(o, f.name, dropped);
         else if (o.format === 'lft-card') await importBundle(o);
         else if (Array.isArray(o)) await importRules(o.map(x => ({ ...x })), f.name);
         else throw new Error('not a Forge file');
@@ -1789,11 +1790,11 @@ async function importFiles(files) {
     } catch (e) { console.error(e); toast(`Couldn't open ${f.name}: ${e.message}`, true); }
   }
 }
-async function importZip(f) {
+async function importZip(f, dropped = false) {
   const JSZip = (await lib(JSZIP, 'ZIP import')).default;
   const zip = await JSZip.loadAsync(f), names = Object.keys(zip.files);
   const saveF = names.find(x => x.endsWith('.lftset.json')), json = names.find(x => x.endsWith('cards.json')), csv = names.find(x => x.endsWith('.csv'));
-  if (saveF) return importProject(JSON.parse(await zip.file(saveF).async('string')), f.name);
+  if (saveF) return importProject(JSON.parse(await zip.file(saveF).async('string')), f.name, dropped);
   if (json) return importRules(JSON.parse(await zip.file(json).async('string')), f.name);
   if (csv) return importRules(parseCSV(await zip.file(csv).async('string')), f.name);
   throw new Error('no save file or cards.json inside');
@@ -1817,10 +1818,16 @@ function mergeProject(inc) {
 function warnIfNewer(o, what) {
   if ((+o?.version || 1) > SAVE_FORMAT) toast(`⚠ ${what} was made with a newer Card Forge (${o.forgeVersion || 'unknown'}). Reload to update before editing, or some details may be lost.`, true);
 }
-async function importProject(o, name) {
+async function importProject(o, name, dropped = false) {
   warnIfNewer(o, name);
   const inc = upgrade(clone(o));
   if (!P.cards.length) { resetTo(inc); setView('library'); return toast(`📂 Opened “${inc.setName}” (${inc.cards.length} cards)`); }
+  // Dropping a save of new cards is the quick path: merge it, no dialog. Cards that would overwrite
+  // ones you already have still get the Merge / Replace question, so a re-drop can't wipe your art.
+  if (dropped && !inc.cards.some(c => P.cards.some(x => x.id === c.id))) {
+    const before = libState(), { add } = mergeProject(inc); save(); setView('library');
+    return undoable(`📂 Added ${add} card${add === 1 ? '' : 's'} from “${inc.setName}”`, before);
+  }
   const v = await ask({ title: '📂 Open save', body: `<p><b>${esc(name)}</b> — “${esc(inc.setName)}”, ${inc.cards.length} cards.</p><p><b>Merge</b> adds its cards to yours (same card ID = theirs wins, decks with the same name combine). <b>Replace</b> swaps your whole set for theirs.</p>`, buttons: [{ label: 'Cancel', value: '' }, { label: 'Replace my set', value: 'replace' }, { label: 'Merge', value: 'merge', primary: true }] });
   if (!v) return;
   if (v === 'replace') resetTo(inc);
@@ -2207,7 +2214,7 @@ const hasFiles = e => e.dataTransfer?.types?.includes('Files');
 addEventListener('dragenter', e => { if (hasFiles(e)) { dragDepth++; document.body.classList.add('dragging'); } });
 addEventListener('dragleave', e => { if (hasFiles(e) && --dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('dragging'); } });
 addEventListener('dragover', e => { if (hasFiles(e)) e.preventDefault(); });
-addEventListener('drop', e => { if (!e.dataTransfer?.files?.length) return; e.preventDefault(); dragDepth = 0; document.body.classList.remove('dragging'); importFiles([...e.dataTransfer.files]); });
+addEventListener('drop', e => { if (!e.dataTransfer?.files?.length) return; e.preventDefault(); dragDepth = 0; document.body.classList.remove('dragging'); importFiles([...e.dataTransfer.files], true); });
 addEventListener('paste', e => {
   const f = [...(e.clipboardData?.files || [])].find(x => x.type.startsWith('image/'));
   if (f && ui.view === 'editor' && !/INPUT|TEXTAREA/.test(document.activeElement?.tagName)) { e.preventDefault(); importFiles([f]); }

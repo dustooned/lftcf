@@ -5,6 +5,15 @@ export const ART = { x: 25, y: 207, w: 450, h: 188 };
 export const TIER_COLORS = { low: '#ff9ba7', mid: '#89e4d7', high: '#ceacff' };
 export const ACT_COLOR = '#ffda52';
 export const TIMING_LABEL = { none: 'NO ABILITY', entry: "HEY, I'M HERE!", activated: 'NAP TIEM!', passive: 'BIG STINK!' };
+// Ability symbols printed beside the banner: waving hand = HEY, I'M HERE!, Zz = NAP TIEM!,
+// stink lines = BIG STINK!. Drawn as strokes (not emoji) so PNG exports never lose them.
+export const ABILITY_ICONS = {
+  entry: '<path d="M9 14V7.5a1.5 1.5 0 013 0V12M12 12V6a1.5 1.5 0 013 0v6M15 12V8a1.5 1.5 0 013 0v7c0 4-2.5 7-6 7-2.4 0-3.9-1-5.3-2.8L4 16a1.5 1.5 0 012.3-1.9L9 16.5"/><path d="M3 7.5c-.9-1.3-.9-2.7 0-4M6 6c-.6-.9-.6-1.8 0-2.6"/>',
+  activated: '<path d="M4 5h8L4 14h8"/><path d="M15 12h5l-5 7h5"/>',
+  passive: '<path d="M6 21c-2.5-3 2.5-5 0-8s2.5-5 0-8"/><path d="M12 21c-2.5-3 2.5-5 0-8s2.5-5 0-8"/><path d="M18 21c-2.5-3 2.5-5 0-8s2.5-5 0-8"/>',
+};
+export const abilityIcon = (timing, x, y, size, color) => ABILITY_ICONS[timing]
+  ? `<g transform="translate(${x} ${y}) scale(${(size / 24).toFixed(3)})" fill="none" stroke="${esc(color)}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">${ABILITY_ICONS[timing]}</g>` : '';
 export const FONTS = ['Arial', 'Verdana', 'Trebuchet MS', 'Georgia', 'Impact', 'Comic Sans MS', 'Courier New', 'Tahoma'];
 
 // Silhouettes: brand shapes for CHA placeholder art, and sticker shapes.
@@ -176,6 +185,7 @@ export function cardInner(c, ctx) {
   const brand = brandOf(c, ctx.project), logo = brand?.logo && href(brand.logo), badge = logo && L.badge !== false;
   const origin = fit(originLine, 16, badge ? 44 : 49, 2, 12);
   const banner = L.banner || (c.type === 'CHA' ? TIMING_LABEL[c.timing || 'none'] : 'ACT / RESOLVE & DISCARD');
+  const icon = c.type === 'CHA' && L.icon !== false ? abilityIcon(c.timing, 30, 408, 30, ink) : '';
   const partners = c.type === 'CHA' ? 'PARTNERS: ' + ((c.partners || []).join(', ') || 'none') : 'Pay SP. Choose a legal target.';
   const angle = L.gradAngle ?? 90, holo = isHolo(c);
   const accentFill = L.accent2 ? `url(#ga-${uid})` : accent, paperFill = L.paper2 ? `url(#gp-${uid})` : paper, borderFill = L.border2 ? `url(#gb-${uid})` : border;
@@ -233,7 +243,8 @@ export function cardInner(c, ctx) {
   ${artLayers.map(l => layerMarkup(l, ctx, c)).join('')}
   ${holoFx}
   <g pointer-events="none">
-  ${text(banner, 32, 431, 21, ink, 800, font)}
+  ${icon}
+  ${text(banner, icon ? 66 : 32, 431, 21, ink, 800, font)}
   ${bodyMarkup}
   <path d="M30 594H470" stroke="${esc(ink)}" stroke-width="2"/>
   ${fit(partners, 17, 43, 2, 12).lines.map((l, i) => text(l, 32, 620 + i * 20, 16, sub, 500, font)).join('')}
