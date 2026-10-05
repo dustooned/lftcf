@@ -4,7 +4,7 @@ import { EFFECTS, TARGET_LABELS, PASSIVES, TIMINGS, LIMITS, autoText, normalize,
 import * as store from './store.js';
 import { VERSION, SAVE_FORMAT, CODENAME, RELEASED, CHANGELOG } from './version.js';
 import { embed, extract } from './png-meta.js';
-import { SAFE_ID, DECK_SIZE, BASE_SHAPES, FOLDER_ICONS, TRASH_DAYS, DEFAULT_BACK, upgrade, registerNames as regNames, usedAssets, deckReport, deckStats, gameDecksJson, readability, playtestDeckData } from './project.js';
+import { SAFE_ID, DECK_SIZE, BASE_SHAPES, FOLDER_ICONS, TRASH_DAYS, DEFAULT_BACK, upgrade, registerNames as regNames, usedAssets, deckReport, deckStats, gameDecksJson, readability, playtestDeckData , lftDeckToProject } from './project.js';
 
 const JSZIP = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm';
 const XLSX = 'https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs';
@@ -29,7 +29,7 @@ const PRESETS = {
 const TEXT_STICKERS = [['LOL!', '#ffda52'], ['NEW!', '#ff9ba7'], ['EPIC', '#ceacff'], ['RARE', '#89e4d7'], ['OOF', '#ffffff'], ['GG', '#aff57e'], ['+1', '#89d6ff'], ['NERF THIS', '#ff5a5a']];
 
 let P = null;                 // the project (set): { setName, brands, tags, folders, cards, assets, sheet }
-const ui = { lastPick: null, view: 'library', cur: null, sel: null, sec: 'stats', dockTab: 'style', folder: 'all', selecting: false, picked: new Set(), f: { q: '', type: 'all', tier: 'all', brand: 'all', tag: 'all', sort: 'num', trig: 'all' } };
+const ui = { lastPick: null, view: 'library', cur: null, sel: null, field: null, drawId: null, sec: 'stats', dockTab: 'style', folder: 'all', selecting: false, picked: new Set(), f: { q: '', type: 'all', tier: 'all', brand: 'all', tag: 'all', sort: 'num', trig: 'all' } };
 // Ability categories: a Character's trigger (the banner words), or an Action's family.
 const TRIGGERS = {
   none:          { icon: '▫️', short: 'NONE',  label: 'No ability' },
@@ -39,6 +39,8 @@ const TRIGGERS = {
   'act-direct':  { icon: '▲',  short: 'DIRECT', label: 'Action: direct' },
   'act-control': { icon: '⬢',  short: 'CONTROL', label: 'Action: control' },
 };
+// Backups as the designers play them now (co-dev notes after the first playtest).
+const BACKUP_RULE = 'A Backup comes from your hand: same brand, or on the host’s Partner list. Once per turn, never on a character that just came into play, and it gives the host +2 HP.';
 const triggerOf = c => c.type === 'ACT' ? 'act-' + (c.family || 'direct') : (c.timing || 'none');
 const undoStack = [], redoStack = [];
 
@@ -135,7 +137,7 @@ function setView(v) {
 }
 const cur = () => P.cards.find(c => c.uid === ui.cur);
 const selLayer = () => cur()?.layout.layers.find(l => l.id === ui.sel);
-function openEditor(uid) { ui.cur = uid; ui.sel = null; setView('editor'); }
+function openEditor(uid) { ui.cur = uid; ui.sel = null; ui.field = null; ui.drawId = null; setView('editor'); }
 
 // ---------------------------------------------------------------- library + decks
 // "Decks" in the UI are `folders` in the data (a card can sit in several). A deck is
@@ -169,7 +171,7 @@ function renderLibrary() {
   const q = f.q.toLowerCase();
   const list = P.cards.map((c, i) => ({ c, i })).filter(({ c }) => inFolder(c) &&
     (!q || [c.name, c.text, c.origin, c.flavor, ...(c.tags || [])].join(' ').toLowerCase().includes(q)) &&
-    (f.type === 'all' || (f.type === 'EXE' ? c.type === 'CHA' && c.edgelord : c.type === f.type)) &&
+    (f.type === 'all' || c.type === f.type) &&
     (f.tier === 'all' || c.tier === f.tier) && (f.brand === 'all' || c.origin === f.brand) &&
     (f.tag === 'all' || (c.tags || []).includes(f.tag) || (c.partners || []).includes(f.tag)) &&
     (f.trig === 'all' || triggerOf(c) === f.trig));
@@ -178,30 +180,30 @@ function renderLibrary() {
   const pool = P.cards.filter(c => inFolder(c)), inView = pool.length, avg = inView ? (pool.reduce((s, c) => s + c.cost, 0) / inView).toFixed(1) : 0;
   const meter = fo && !fo.sandbox ? (s => `<b class="deckmeter ${s.legal ? 'ok' : ''}" title="${esc(s.note)}">${s.n}/${DECK_SIZE}</b> ${esc(s.note)} · `)(deckStatus(fo.id)) : '';
   $('#libCount').innerHTML = `${meter}${list.length === inView ? '' : list.length + ' of '}${inView} card${inView === 1 ? '' : 's'} · ${pool.filter(c => c.type === 'CHA').length} CHA · ${pool.filter(c => c.type === 'ACT').length} ACT · avg ${avg} SP · ${Object.entries(TRIGGERS).map(([k, t]) => [t, pool.filter(c => triggerOf(c) === k).length]).filter(([, n]) => n).map(([t, n]) => `<span title="${esc(t.label)}">${t.icon}${n}</span>`).join(' ')}`;
-  $('#folderActs').innerHTML = fo ? (fo.sandbox ? `<button class="btn primary" data-fact="roll">🎲 Roll 5 more</button><button class="btn" data-fact="clear">🧹 Clear sandbox</button>` : `<button class="btn primary" data-fact="playtest" title="One file with this deck and its card art, for the playtest table">🕹 Send to playtest</button><button class="btn" data-fact="export">⬇ Export deck</button>`) + `<button class="btn" data-fact="print" title="Real-size print sheet, 9 cards per page">🖨 Print</button><button class="btn" data-fact="version">📸 Snapshot</button><button class="btn" data-fact="edit">⋯ Deck</button>` : '';
+  $('#folderActs').innerHTML = fo ? (fo.sandbox ? `<button class="btn primary" data-fact="roll">🎲 Roll 5 more</button><button class="btn" data-fact="clear">🧹 Clear sandbox</button>` : `<button class="btn primary" data-fact="playtest" title="One file with this deck and its card art, for the playtest table or SAGA">🕹 Send to playtest</button>`) + `<button class="btn" data-fact="print" title="Real-size print sheet, 9 cards per page">🖨 Print</button><button class="btn" data-fact="edit" title="Rename, export, snapshot, duplicate or delete this deck">⋯ Deck</button>` : '';
   $('#selectBtn').setAttribute('aria-pressed', ui.selecting);
   $('#selectBtn').textContent = ui.selecting ? '✓ Done selecting' : '☑ Select';
   renderSelbar(list.map(x => x.c));
   const filtered = f.q || f.type !== 'all' || f.tier !== 'all' || f.brand !== 'all' || f.tag !== 'all' || f.trig !== 'all';
+  const nf = ['tier', 'brand', 'tag', 'trig'].filter(k => f[k] !== 'all').length + (f.sort !== 'num' ? 1 : 0);
+  $('#fCount').hidden = !nf; $('#fCount').textContent = nf;
   let empty = '';
-  if (!P.cards.length) empty = `<div class="welcome">${welcomeArt}<h2>Your card library is empty</h2><p>Make your first card, roll a random one, or load the 24 base-game cards to see how they're built.</p>
-    <div class="btnrow"><button class="btn primary" data-new="CHA">+ New Character</button><button class="btn primary alt" data-new="ACT">+ New Action</button><button class="btn" data-new="random">🎲 Surprise me</button></div>
+  if (!P.cards.length) empty = `<div class="welcome">${welcomeArt}<h2>Your card library is empty</h2><p>Make your first card, start from a picture (drop one anywhere on this page), or load the 24 base-game cards to see how they're built.</p>
+    <div class="btnrow"><button class="btn primary" data-new="CHA">+ Character</button><button class="btn primary alt" data-new="ACT">+ Action</button><button class="btn" data-new="pic">🖼 From picture</button><button class="btn" data-new="random">🎲 Random</button></div>
     <p style="margin-top:14px"><button class="btn" data-act="roll5">🧪 Start in the Sandbox (5 random cards)</button></p>
     <p class="small" style="margin-top:6px"><button class="link" data-act="loadBase">Load the base-game cards as examples</button> · <button class="link" data-act="openHelp">How does this work?</button></p></div>`;
   else if (!list.length && filtered) empty = `<div class="empty">No cards match. <button class="link" data-act="clearFilters">Clear filters</button></div>`;
   else if (!list.length) empty = `<div class="empty">This deck is empty.<br>Go to <b>All cards</b>, then drag cards onto it (on a phone, hold a card first). New cards made here land in it automatically.</div>`;
   const showStacks = ui.folder === 'all' && !filtered && P.folders.length && P.cards.length;
   const sb = sandbox();
-  const tip = fo?.sandbox ? `<div class="tipcard slim">🧪 <b>Sandbox:</b> experiments live here and never count toward a deck. Tweak the fun ones, drag keepers onto a deck, then <b>🧹 Clear sandbox</b>.</div>`
-    : ui.folder === 'all' && P.cards.length && !filtered && !lsGet('forge-tip-sandbox') ? `<div class="tipcard"><b>🧪 Tip: build by experimenting</b><p>Roll a handful of random cards into the Sandbox, tweak the ones that make you laugh, drag the keepers into a real deck, then clear the rest. Nothing in the Sandbox counts toward a deck.</p>
-      <div class="btnrow"><button class="btn primary" data-act="roll5">🎲 Roll 5 into the Sandbox</button>${sb ? `<button class="btn" data-open-folder="${sb.id}">Open Sandbox</button>` : ''}<button class="link small" data-act="hideTip">Hide this tip</button></div></div>` : '';
+  const tip = fo?.sandbox ? `<div class="tipcard slim">🧪 <b>Sandbox:</b> experiments live here and never count toward a deck. Tweak the fun ones, drag keepers onto a deck, then <b>🧹 Clear sandbox</b>.</div>` : '';
   const summary = fo && !fo.sandbox && pool.length ? deckSummary(fo) : '';
   $('#grid').innerHTML = tip + summary + (showStacks ? stacksMarkup() : '') + (empty || '') + (empty ? '' : list.map(({ c, i }) => {
     const errs = validate(c, P).filter(v => v[0] === 'error').length, picked = ui.picked.has(c.uid);
     const fIcons = c.folders.map(id => P.folders.find(x => x.id === id)?.icon).filter(Boolean).join('');
     return `<button class="tile ${picked ? 'picked' : ''} ${isHolo(c) ? 'holo' : ''}" data-uid="${c.uid}" title="${ui.selecting ? 'Select' : 'Edit'} ${esc(c.name)} (hold to drag)" ${ui.selecting ? `aria-pressed="${picked}"` : ''}>
       <div class="card-wrap">${thumbImg(c, i)}${errs ? `<span class="badge" title="${errs} problem(s)">!</span>` : ''}${ui.selecting ? `<span class="pick">${picked ? '✓' : ''}</span>` : ''}</div>
-      <div class="cap"><b>${esc(c.name)}</b><span class="pill">${c.type === 'CHA' && c.edgelord ? 'EXE' : c.type}</span><span class="pill">${c.cost} SP</span><span class="pill trig" title="${esc(TRIGGERS[triggerOf(c)]?.label)}">${TRIGGERS[triggerOf(c)]?.icon} ${TRIGGERS[triggerOf(c)]?.short}</span>${c.type === 'CHA' ? `<span class="pill">${c.hp} HP</span>` : ''}${fIcons ? `<span title="In decks">${fIcons}</span>` : ''}</div></button>`;
+      <div class="cap"><b>${esc(c.name)}</b><span class="pill">${c.type}</span><span class="pill">${c.cost} SP</span><span class="pill trig" title="${esc(TRIGGERS[triggerOf(c)]?.label)}">${TRIGGERS[triggerOf(c)]?.icon} ${TRIGGERS[triggerOf(c)]?.short}</span>${c.type === 'CHA' ? `<span class="pill">${c.hp} HP</span>` : ''}${fIcons ? `<span title="In decks">${fIcons}</span>` : ''}</div></button>`;
   }).join(''));
   queueThumbs();
 }
@@ -213,8 +215,7 @@ function deckSummary(fo) {
   return `<div class="decksum">
     <div class="ds-box"><b>Cost curve</b> <small>(SP)</small><svg viewBox="0 0 240 84" role="img" aria-label="Cards by cost: ${st.curve.map((n, i) => `${n} at ${i}`).join(', ')}">${bars}</svg></div>
     <div class="ds-box"><b>Brand mix</b><div class="chips">${st.brands.map(([k, n]) => `<span class="chip static">${esc(k)} <b>${n}</b></span>`).join('')}</div></div>
-    <div class="ds-box"><b>In the TTS game</b><div class="seg">${[['', 'Not used'], ['Red', '🔴 Red deck'], ['Blue', '🔵 Blue deck']].map(([k, l]) => `<button type="button" data-game="${k}" aria-pressed="${side === k}">${l}</button>`).join('')}</div>
-      <small class="${s.legal ? 'ok' : 'warnc'}">${s.legal ? '✓ Ready: 20 cards, all different.' : `Not tournament-legal yet: ${esc(s.note)}.`} Exports include <code>data/decks.json</code>.</small></div>
+    <div class="ds-box"><b>Deck check</b><p class="ds-legal ${s.legal ? 'ok' : 'warnc'}">${s.legal ? '✓ Ready: 20 cards, all different.' : `Not tournament-legal yet: ${esc(s.note)}.`}</p>${side ? `<small>${side === 'Red' ? '🔴' : '🔵'} ${side} deck in the Tabletop Simulator game</small>` : ''}</div>
   </div>`;
 }
 // ---- Trash view: deleted cards wait here for TRASH_DAYS days.
@@ -322,11 +323,19 @@ async function createFolder() {
 async function editFolder(id) {
   const f = P.folders.find(x => x.id === id); if (!f) return;
   const s = deckStatus(id);
-  const v = await ask({ title: `${f.icon} Edit deck`, body: `<label class="field" style="display:block"><span class="lbl">Name</span><input type="text" id="modalInput" maxlength="40" value="${esc(f.name)}" autocomplete="off"></label><div class="field"><span class="lbl">Icon</span>${iconGrid(f.icon)}</div><p class="muted small">${s.n}/${DECK_SIZE} · ${esc(s.note)}. Deleting a deck never deletes its cards.</p>`, buttons: [{ label: 'Delete deck', value: 'del', danger: true }, { label: '⧉ Duplicate', value: 'dup' }, { label: '📸 Snapshot', value: 'version' }, { label: '⬇ Export', value: 'export' }, { label: 'Save', value: 'ok', primary: true }] });
+  const side = ['Red', 'Blue'].find(k => P.gameDecks[k] === id) || '';
+  const v = await ask({ title: `${f.icon} Edit deck`, body: `<label class="field" style="display:block"><span class="lbl">Name</span><input type="text" id="modalInput" maxlength="40" value="${esc(f.name)}" autocomplete="off"></label><div class="field"><span class="lbl">Icon</span>${iconGrid(f.icon)}</div>
+    <div class="field"><span class="lbl">Tabletop Simulator game <span class="muted">(legacy)</span></span><div class="radio-row">${[['', 'Not used'], ['Red', '🔴 Red deck'], ['Blue', '🔵 Blue deck']].map(([k, l]) => `<label><input type="radio" name="fside" value="${k}" ${side === k ? 'checked' : ''}> ${l}</label>`).join('')}</div></div>
+    <p class="muted small">${s.n}/${DECK_SIZE} · ${esc(s.note)}. Deleting a deck never deletes its cards.</p>`, buttons: [{ label: 'Delete deck', value: 'del', danger: true }, { label: '⧉ Duplicate', value: 'dup' }, { label: '📸 Snapshot', value: 'version' }, { label: '⬇ Export ZIP', value: 'export' }, { label: 'Save', value: 'ok', primary: true }] });
   if (v === 'dup') return duplicateFolder(f);
   if (v === 'version') return saveVersion(f.id);
   if (v === 'export') return exportZip(P.cards.filter(c => c.folders.includes(f.id)), f.name);
-  if (v === 'ok') { f.name = $('#modalInput').value.trim() || f.name; f.icon = $('#modalForm input[name=ficon]:checked')?.value || f.icon; }
+  if (v === 'ok') {
+    f.name = $('#modalInput').value.trim() || f.name; f.icon = $('#modalForm input[name=ficon]:checked')?.value || f.icon;
+    const ns = $('#modalForm input[name=fside]:checked')?.value ?? side;
+    for (const k of ['Red', 'Blue']) if (P.gameDecks[k] === id) P.gameDecks[k] = '';
+    if (ns) P.gameDecks[ns] = id;
+  }
   if (v === 'del') { const before = libState(); P.folders = P.folders.filter(x => x !== f); for (const c of P.cards) c.folders = c.folders.filter(x => x !== id); for (const s of ['Red', 'Blue']) if (P.gameDecks[s] === id) P.gameDecks[s] = ''; if (ui.folder === id) ui.folder = 'all'; undoable('Deck deleted (cards kept).', before); }
   if (v) { save(); renderLibrary(); }
 }
@@ -372,7 +381,6 @@ function randomCard() {
     c.tier = c.cost >= 4 ? 'high' : c.cost >= 2 ? 'mid' : 'low';
     const brands = P.brands.filter(b => b.name !== 'Unassigned'); c.origin = (brands[Math.floor(Math.random() * brands.length)] || P.brands[0]).name;
     const peer = P.cards.find(o => o.origin === c.origin && o.tags?.length); c.tags = peer ? [...peer.tags] : []; c.partners = [...c.tags];
-    c.edgelord = c.tier === 'high' && Math.random() < 0.5;
   }
   Object.assign(c, randomAbility(type));
   Object.assign(c.layout, Object.values(PRESETS)[Math.floor(Math.random() * Object.keys(PRESETS).length)]);
@@ -402,7 +410,7 @@ async function clearSandbox() {
   for (const c of P.cards) c.folders = c.folders.filter(x => x !== sb.id);
   ui.picked.clear(); save(); renderLibrary(); undoable('🧹 Sandbox cleared.', before);
 }
-function newFromButton(kind) { if (kind === 'random') surprise(); else addCard(newCard(kind, P)); }
+function newFromButton(kind) { if (kind === 'random') surprise(); else if (kind === 'pic') $('#cardPicPick').click(); else addCard(newCard(kind, P)); }
 
 $('#folders').addEventListener('click', async e => {
   const open = e.target.closest('[data-open-folder]'), edit = e.target.closest('[data-edit-folder]');
@@ -603,13 +611,13 @@ setZoom(+(lsGet('forge-zoom') || (matchMedia('(max-width: 760px)').matches ? 104
 // ---------------------------------------------------------------- editor: window layout
 const ED = { swap: false, focus: false, bg: 0, w: 400 };
 try { Object.assign(ED, JSON.parse(lsGet('forge-editor') || '{}')); } catch { }
+Object.assign(ED, { swap: false, focus: false, bg: 0 });
 const BACKDROPS = ['studio', 'checker', 'dark', 'light', 'felt'];
 function applyEditorLayout() {
   const e = $('#view-editor');
   e.classList.toggle('swap', !!ED.swap); e.classList.toggle('focus', !!ED.focus);
   $('#stage').dataset.bg = BACKDROPS[ED.bg % BACKDROPS.length];
   document.documentElement.style.setProperty('--insp-w', clamp(ED.w, 300, 720) + 'px');
-  $('#focusBtn').setAttribute('aria-pressed', !!ED.focus); $('#focusBtn').title = ED.focus ? 'Show the side panel again' : 'Focus: hide the side panel';
   // Workspace windows: each can be minimised, and Full canvas hides everything but the card.
   document.body.classList.toggle('zen', !!ED.zen && ui.view === 'editor');
   $('#zenBtn').setAttribute('aria-pressed', !!ED.zen); $('#zenBtn').title = ED.zen ? 'Exit full canvas (F or Esc)' : 'Full canvas: hide everything but the card (F)';
@@ -618,9 +626,6 @@ function applyEditorLayout() {
   $('#panelTab').hidden = !(ED.focus || ED.zen);
   lsSet('forge-editor', JSON.stringify(ED));
 }
-$('#swapBtn').addEventListener('click', () => { ED.swap = !ED.swap; applyEditorLayout(); });
-$('#bgBtn').addEventListener('click', () => { ED.bg = (ED.bg + 1) % BACKDROPS.length; applyEditorLayout(); toast('Backdrop: ' + BACKDROPS[ED.bg]); });
-$('#focusBtn').addEventListener('click', () => { ED.focus = !ED.focus; applyEditorLayout(); });
 $('#zenBtn').addEventListener('click', () => toggleZen());
 $('#panelTab').addEventListener('click', () => { ED.focus = false; ED.zen = false; applyEditorLayout(); });
 function toggleZen(on = !ED.zen) { ED.zen = on; applyEditorLayout(); requestAnimationFrame(() => applyView()); toast(on ? 'Full canvas — press F or Esc to bring the panels back' : 'Panels are back'); }
@@ -672,7 +677,7 @@ function renderEditor() {
 function updateTitle() { const c = cur(); if (c) $('#edTitle').textContent = `#${P.cards.indexOf(c) + 1} ${c.name}`; }
 function renderStage() {
   const c = cur(); if (!c) return;
-  svg.innerHTML = cardInner(c, { project: P, index: P.cards.indexOf(c), uid: 'ed', href, sel: ui.sel, editing: true, handleK: 1 / view.z });
+  svg.innerHTML = cardInner(c, { project: P, index: P.cards.indexOf(c), uid: 'ed', href, sel: tool.name === 'draw' ? null : ui.sel, field: ui.field, editing: true, handleK: 1 / view.z });
 }
 function updateLayerDOM(L) {
   const t = layerTransform(L);
@@ -681,8 +686,16 @@ function updateLayerDOM(L) {
   const h = svg.querySelector('#handles'); if (h) h.innerHTML = handlesMarkup(L, 1 / view.z);
 }
 function refreshLayers() { renderLayerBar(); renderLayersPop(); }
-function select(id) { ui.sel = id; renderStage(); refreshLayers(); }
-function stepCard(d) { if (P.cards.length < 2) return; const i = P.cards.indexOf(cur()); ui.cur = P.cards[(i + d + P.cards.length) % P.cards.length].uid; ui.sel = null; renderEditor(); }
+function select(id) { ui.sel = id; if (id) ui.field = null; renderStage(); refreshLayers(); }
+// Card text (name, cost, HP, banner, rules, brand, partners) is edited in the dock, not as layers.
+function selectField(key) {
+  ui.field = key; ui.sel = null; closeInline();
+  if (tool.name === 'draw') setTool('move');
+  renderStage(); refreshLayers();
+  const f = $('#layerBar [data-focus]'); if (f) { f.focus(); f.select?.(); }
+}
+function clearField() { if (!ui.field) return; ui.field = null; renderStage(); renderLayerBar(); }
+function stepCard(d) { if (P.cards.length < 2) return; const i = P.cards.indexOf(cur()); ui.cur = P.cards[(i + d + P.cards.length) % P.cards.length].uid; ui.sel = null; ui.field = null; ui.drawId = null; renderEditor(); }
 
 // ---- canvas zoom & pan
 function metrics() { const r = svg.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, k: r.width * view.z / 640 }; }
@@ -707,18 +720,21 @@ function zoomAt(z, px, py) {
   applyView();
 }
 function setTool(name) {
-  tool.name = name;
+  const was = tool.name; tool.name = name;
   for (const b of $$('#toolRail [data-tool]')) b.setAttribute('aria-pressed', b.dataset.tool === name);
   $('#stage').classList.toggle('hand', name === 'hand' || tool.space);
+  $('#stage').classList.toggle('drawing', name === 'draw' && !tool.space);
+  if (name === 'draw') ui.field = null;
+  if ((was === 'draw') !== (name === 'draw') && cur()) { renderStage(); renderLayerBar(); }
 }
 
 // ---- tool rail, layers button, zoom pill
 const RAIL = [
-  ['move', I.move, 'Move', 'Move & select (V)'], ['hand', I.hand, 'Pan', 'Pan the canvas (H, or hold Space)'], null,
+  ['move', I.move, 'Move', 'Move & select (V)'], ['hand', I.hand, 'Pan', 'Pan the canvas (H, or hold Space)'], ['draw', I.brush, 'Draw', 'Draw & sketch (B) · eraser (E)'], null,
   ['addImg', I.image, 'Image', 'Add an image (I)'], ['addText', I.text, 'Text', 'Add text (T)'], ['addSticker', I.shapes, 'Shapes', 'Shapes & stickers (S)'], ['addLogo', I.logo, 'Logo', 'Brand logo'],
 ];
 $('#toolRail').innerHTML = `<button type="button" class="rail-min" data-railmin title="Minimise / expand the tools" aria-label="Minimise or expand the tools">${I.minus}</button>` + RAIL.map(r => !r ? '<span class="rail-sep" aria-hidden="true"></span>'
-  : `<button type="button" class="tool" ${r[0] === 'move' || r[0] === 'hand' ? `data-tool="${r[0]}" aria-pressed="${r[0] === 'move'}"` : `id="${r[0]}"`} title="${r[3]}" aria-label="${r[3]}">${r[1]}<small>${r[2]}</small></button>`).join('');
+  : `<button type="button" class="tool" ${['move', 'hand', 'draw'].includes(r[0]) ? `data-tool="${r[0]}" aria-pressed="${r[0] === 'move'}"` : `id="${r[0]}"`} title="${r[3]}" aria-label="${r[3]}">${r[1]}<small>${r[2]}</small></button>`).join('');
 $('#toolRail').addEventListener('click', e => {
   if (e.target.closest('[data-railmin]')) { ED.railMin = !ED.railMin; return applyEditorLayout(); }
   const b = e.target.closest('[data-tool]'); if (b) setTool(b.dataset.tool);
@@ -769,20 +785,25 @@ function snapMove(L, free) {
 let editTap = null;
 svg.addEventListener('pointerdown', e => {
   if (!cur() || e.button > 1) return;
+  // A first finger or the mouse means nothing else is down: forget any pointer whose release we
+  // never saw (a file picker or alt-tab can swallow it), or every later tap would look like a pinch.
+  if (e.isPrimary && (pts.size || editTap)) { pts.clear(); ptsC.clear(); editTap = null; if (gest?.mode === 'draw') cancelStroke(); gest = null; }
   const pan = wantsPan(e);
-  const hit = !pan && e.target.closest('[data-edit]');
+  const hit = !pan && tool.name !== 'draw' && e.target.closest('[data-edit]');
   if (hit && !pts.size) { editTap = { key: hit.dataset.edit, x: e.clientX, y: e.clientY }; gest = null; return; }
   if (e.button === 1) e.preventDefault();
   pts.set(e.pointerId, toCard(e)); ptsC.set(e.pointerId, { x: e.clientX, y: e.clientY }); try { svg.setPointerCapture(e.pointerId); } catch { }
   let L = selLayer();
   if (pts.size === 2) {
-    if (L && !L.locked && gest?.mode !== 'pan') {
+    if (gest?.mode === 'draw') { cancelStroke(); gest = null; }
+    if (L && !L.locked && gest?.mode !== 'pan' && tool.name !== 'draw') {
       const [a, b] = [...pts.values()]; snap();
       gest = { mode: 'pinch', d0: Math.max(1, dist(a, b)), a0: ang(a, b), s0: L.scale, r0: L.rot || 0, m0: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, x0: L.x, y0: L.y };
     } else { const m = midC(); gest = { mode: 'vpinch', z0: view.z, d0: m.d, anchor: clientToCard(m.x, m.y) }; }
     return;
   }
   if (pan) { gest = startPan(e); return; }
+  if (tool.name === 'draw') { gest = startStroke(e); return; }
   const h = e.target.closest('[data-handle]');
   if (h && L && !L.locked) {
     snap(); const p = pts.get(e.pointerId);
@@ -797,6 +818,7 @@ svg.addEventListener('pointerdown', e => {
     return;
   }
   if (ui.sel) select(null);
+  if (ui.field) clearField();
   gest = view.z > 1 ? startPan(e) : null;
 });
 svg.addEventListener('pointermove', e => {
@@ -804,6 +826,7 @@ svg.addEventListener('pointermove', e => {
   pts.set(e.pointerId, toCard(e)); ptsC.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (!gest) return;
   if (gest.mode === 'pan') { view.cx = gest.cx0 - (e.clientX - gest.x0) / gest.k; view.cy = gest.cy0 - (e.clientY - gest.y0) / gest.k; return applyView(); }
+  if (gest.mode === 'draw') return moveStroke(e);
   if (gest.mode === 'vpinch') {
     if (ptsC.size < 2) return;
     const m = midC(); view.z = clamp(gest.z0 * m.d / gest.d0, 1, 8);
@@ -843,9 +866,10 @@ svg.addEventListener('pointermove', e => {
 const pointerEnd = e => {
   if (editTap) {
     const t = editTap; editTap = null;
-    if (e.type === 'pointerup' && Math.hypot(e.clientX - t.x, e.clientY - t.y) < 10) { if (ui.sel) select(null); openInline(t.key); }
+    if (e.type === 'pointerup' && Math.hypot(e.clientX - t.x, e.clientY - t.y) < 10) { if (t.key === 'art') $('#imgPick').click(); else selectField(t.key); }
     return;
   }
+  if (gest?.mode === 'draw') { pts.delete(e.pointerId); ptsC.delete(e.pointerId); const g = gest; gest = null; return e.type === 'pointerup' ? commitStroke(g) : cancelStroke(); }
   pts.delete(e.pointerId); ptsC.delete(e.pointerId);
   if ((gest?.mode === 'pinch' || gest?.mode === 'vpinch') && pts.size < 2) { if (gest.mode === 'pinch') save(); gest = null; }
   if (!pts.size) {
@@ -867,6 +891,8 @@ $('#stage').addEventListener('wheel', e => {
   } else if (view.z > 1) { e.preventDefault(); const k = metrics().k; view.cx += e.deltaX / k; view.cy += e.deltaY / k; applyView(); }
 }, { passive: false });
 svg.addEventListener('dblclick', e => {
+  const hit = tool.name !== 'draw' && e.target.closest('[data-edit]');
+  if (hit && hit.dataset.edit !== 'art' && EDIT_REGIONS[hit.dataset.edit] && hit.dataset.edit !== 'partners') return openInline(hit.dataset.edit);
   if (!e.target.closest('[data-layer]') || selLayer()?.kind !== 'text') return;
   ui.dockTab = 'style'; renderLayerBar(); $('#layerBar [data-lf="text"]')?.select();
 });
@@ -918,24 +944,26 @@ async function commitInline(key, v) {
     if (v === '__new') { const n = await promptText('New brand', 'Brand name'); if (n && addBrand(n)) apply('origin', n, true); return; }
     return apply('origin', v, true);
   }
-  if (key === 'text') {
-    const t = v.trim(); if (t === c.text) return;
-    snap();
-    if (!t) { c.textMode = 'auto'; normalize(c); }
-    else {
-      // Keep their wording, and if it reads as a known effect, make the game do that too.
-      const r = parseAbility(t, c.type);
-      if (r) {
-        if (c.type === 'CHA') { c.timing = r.timing; if (r.passive) c.passive = r.passive; else if (r.timing !== 'passive') delete c.passive; }
-        if (r.effect) c.effect = r.effect; else if (c.type === 'CHA') delete c.effect;
-        if (r.abilityCost != null) c.abilityCost = r.abilityCost;
-      }
-      c.textMode = 'custom'; c.text = t; normalize(c);
-      if (c.text === autoText(c)) c.textMode = 'auto';
-      toast(r ? '✨ Saved. The game reads it as: ' + autoText(c) : "Saved your wording. The game effect didn't change — check the Ability tab.", !r);
+  if (key === 'text') { if (v.trim() !== c.text) setRulesText(v); }
+}
+// Keep their wording, and if it reads as a known effect, make the game do that too.
+function setRulesText(v) {
+  const c = cur(); if (!c) return;
+  const t = v.trim();
+  snap();
+  if (!t) { c.textMode = 'auto'; normalize(c); }
+  else {
+    const r = parseAbility(t, c.type);
+    if (r) {
+      if (c.type === 'CHA') { c.timing = r.timing; if (r.passive) c.passive = r.passive; else if (r.timing !== 'passive') delete c.passive; }
+      if (r.effect) c.effect = r.effect; else if (c.type === 'CHA') delete c.effect;
+      if (r.abilityCost != null) c.abilityCost = r.abilityCost;
     }
-    renderStage(); renderInspector(); renderChecks(); save();
+    c.textMode = 'custom'; c.text = t; normalize(c);
+    if (c.text === autoText(c)) c.textMode = 'auto';
+    toast(r ? '✨ Saved. The game reads it as: ' + autoText(c) : "Saved your wording. The game effect didn't change — check the Mechanics tab.", !r);
   }
+  renderStage(); renderInspector(); renderChecks(); save();
 }
 
 // ---------------------------------------------------------------- editor: layers
@@ -1027,8 +1055,10 @@ const dkBtn = (a, icon, label, extra = '') => `<button type="button" class="dk-b
 function renderLayerBar() {
   const c = cur(), L = selLayer(), bar = $('#layerBar');
   if (!c) { bar.innerHTML = ''; return; }
+  if (tool.name === 'draw') { bar.innerHTML = drawDock(c); return; }
+  if (!L && ui.field) { bar.innerHTML = fieldDock(c, ui.field); return; }
   if (!L) {
-    bar.innerHTML = `<div class="dock-hint">${dockMinBtn()}<span><b>Tap text on the card</b> to type into it</span><span><b>Tap art</b> to grab it · corners resize · yellow dot spins</span><span><b>Pinch</b> or <b>Ctrl + scroll</b> to zoom · <b>Space + drag</b> to pan</span></div>`;
+    bar.innerHTML = `<div class="dock-hint">${dockMinBtn()}<span><b>Tap any text on the card</b> to edit it here</span><span><b>Tap art</b> to grab it · corners resize · yellow dot spins</span><span><b>Draw</b> sketches straight onto the card</span><span><b>Pinch</b> or <b>Ctrl + scroll</b> to zoom</span></div>`;
     return;
   }
   const tabs = Object.keys(DOCK_TABS).filter(k => k !== 'adjust' || L.kind === 'image');
@@ -1042,6 +1072,69 @@ function renderLayerBar() {
   const tabBar = `<div class="dock-tabs" role="tablist">${tabs.map(k => `<button type="button" role="tab" data-dtab="${k}" aria-selected="${k === tab}">${DOCK_TABS[k]}</button>`).join('')}</div>`;
   bar.innerHTML = head + tabBar + `<div class="dock-body">${dockBody(c, L, tab)}</div>`;
 }
+// ---- card text in the dock: tap a part of the card, change it here
+const FIELD_LABEL = { name: 'Name', cost: 'Cost', hp: 'HP', origin: 'Brand', banner: 'Ability', text: 'Rules & lore', partners: 'Partners' };
+const numStep = (path, v, label) => `<span class="dk-step" role="group" aria-label="${label}"><button type="button" class="dk-ic" data-fa="step" data-path="${path}" data-d="-1" aria-label="Less">${I.minus}</button><input type="number" class="dk-num" data-ff="${path}" value="${v ?? 0}" inputmode="numeric" aria-label="${label}"${path === 'cost' || path === 'hp' ? ' data-focus' : ''}><button type="button" class="dk-ic" data-fa="step" data-path="${path}" data-d="1" aria-label="More">${I.plus}</button></span>`;
+const softBtn = (fa, v, label, on) => `<button type="button" data-fa="${fa}" data-v="${esc(v)}" aria-pressed="${!!on}">${label}</button>`;
+function fieldDock(c, key) {
+  const head = `<div class="dock-head"><span class="thumb txt">✎</span><b class="dock-name">${FIELD_LABEL[key] || 'Card text'}</b><span class="spacer"></span>${dockMinBtn()}<button type="button" class="dk-done" data-fa="done" title="Done (Esc)">${I.check}<span>Done</span></button></div>`;
+  return head + `<div class="dock-body">${fieldBody(c, key)}</div>`;
+}
+function fieldBody(c, key) {
+  const e = c.effect, spec = e && EFFECTS[e.kind];
+  if (key === 'name') return `<div class="dock-row"><input type="text" class="dk-text" data-ff="name" value="${esc(c.name)}" maxlength="40" aria-label="Card name" data-focus>${dkBtn('randName', '🎲', 'Random').replace('data-la', 'data-fa')}</div>
+    <div class="dock-row">${softBtn('type', 'CHA', '🥊 Character', c.type === 'CHA')}${softBtn('type', 'ACT', '⚡ Action', c.type === 'ACT')}<span class="dock-note">Double-click card text to type right on the card.</span></div>`;
+  if (key === 'cost') return `<div class="dock-row"><span class="dk-lbl">SP to play</span>${numStep('cost', c.cost, 'Cost')}${c.type === 'CHA' ? `<span class="dk-lbl">HP</span>${numStep('hp', c.hp, 'HP').replace(' data-focus', '')}` : ''}</div>`;
+  if (key === 'hp') return `<div class="dock-row"><span class="dk-lbl">HP</span>${numStep('hp', c.hp, 'HP')}<span class="dk-lbl">Cost</span>${numStep('cost', c.cost, 'Cost').replace(' data-focus', '')}<span class="dock-note">HP is also how hard it hits.</span></div>`;
+  if (key === 'origin') return c.type === 'CHA'
+    ? `<div class="chips dk-chips">${P.brands.map(b => `<button type="button" class="chip" data-fa="brand" data-v="${esc(b.name)}" aria-pressed="${c.origin === b.name}">${shapeIcon(b.shape, b.color || 'currentColor', 16)} ${esc(b.name)}</button>`).join('')}<button type="button" class="chip" data-fa="newBrand">＋ New brand</button></div>
+      <div class="dock-row"><span class="dk-lbl">Tier</span><div class="seg-soft">${['low', 'mid', 'high'].map(t => softBtn('tier', t, cap(t), c.tier === t)).join('')}</div></div>`
+    : `<div class="dock-row"><div class="seg-soft">${softBtn('family', 'direct', '▲ Direct', c.family === 'direct')}${softBtn('family', 'control', '⬢ Control', c.family === 'control')}</div><span class="dock-note">Actions have a family instead of a brand.</span></div>`;
+  if (key === 'banner') return `${c.type === 'CHA' ? `<div class="dock-row"><div class="seg-soft">${Object.keys(TIMINGS).map(k => softBtn('timing', k, `${TRIGGERS[k].icon} ${TRIGGERS[k].short}`, c.timing === k)).join('')}</div></div>` : ''}
+    <div class="dock-row"><input type="text" class="dk-text" data-ff="layout.banner" value="${esc(c.layout.banner || '')}" maxlength="28" placeholder="${esc(c.type === 'CHA' ? TIMING_LABEL[c.timing] : 'ACT / RESOLVE & DISCARD')}" aria-label="Ability name" data-focus><span class="dock-note">Give the ability its own name, or leave it blank.</span></div>`;
+  if (key === 'text') return `<textarea class="dk-area" data-ff="text" rows="3" aria-label="Rules text" placeholder="Say what it does, e.g. “when this enters, deal 2 damage to an enemy”" data-focus>${esc(c.text)}</textarea>
+    <div class="dock-row">${dkBtn('interpret', I.wand, 'Read my wording', ' accent').replace('data-la', 'data-fa')}${c.textMode === 'custom' ? dkBtn('autoText', I.restore, 'Back to auto text').replace('data-la', 'data-fa') : '<span class="dock-note">Auto text: written from the mechanics below.</span>'}</div>
+    ${(c.type === 'ACT' || c.timing === 'entry' || c.timing === 'activated') && e ? `<div class="dock-row"><select data-ff="effect.kind" aria-label="Effect">${Object.entries(EFFECTS).map(([k, v]) => `<option value="${k}" ${e.kind === k ? 'selected' : ''}>${v.label}</option>`).join('')}</select>
+      <select data-ff="effect.target" aria-label="Target">${spec.targets.map(t => `<option value="${t}" ${e.target === t ? 'selected' : ''}>${TARGET_LABELS[t]}</option>`).join('')}</select>
+      ${spec.amount ? `<span class="dk-lbl">Amount</span>${numStep('effect.amount', e.amount, 'Amount')}` : ''}${c.timing === 'activated' ? `<span class="dk-lbl">Ability SP</span>${numStep('abilityCost', c.abilityCost, 'Ability cost')}` : ''}</div>` : ''}
+    <textarea class="dk-area small" data-ff="flavor" rows="2" maxlength="140" aria-label="Flavor or lore" placeholder="Flavor or lore line (optional)">${esc(c.flavor || '')}</textarea>`;
+  if (key === 'partners') {
+    const pool = [...new Set([...P.tags, ...P.brands.map(b => b.name).filter(n => n !== 'Unassigned'), ...(c.partners || [])])];
+    return `<div class="chips dk-chips">${pool.map(t => `<button type="button" class="chip" data-fa="partner" data-v="${esc(t)}" aria-pressed="${(c.partners || []).includes(t)}">${esc(t)}</button>`).join('') || '<span class="dock-note">No allegiances yet. Add them in the Brand tab.</span>'}</div>
+      <p class="dock-note">${BACKUP_RULE}</p>`;
+  }
+  return '';
+}
+const liveField = new Set(['name', 'layout.banner', 'flavor']);
+$('#layerBar').addEventListener('input', e => {
+  const el = e.target, f = el.dataset.ff, c = cur(); if (!f || !c) return;
+  if (liveField.has(f)) return apply(f, el.value, false);
+  if (f === 'text') { snap(); c.textMode = 'custom'; c.text = el.value; el.dataset.dirty = '1'; renderStage(); renderChecks(); save(); }
+});
+$('#layerBar').addEventListener('change', e => {
+  const el = e.target, f = el.dataset.ff, c = cur(); if (!f || !c) return;
+  if (f === 'text') { if (el.dataset.dirty) { setRulesText(el.value); renderLayerBar(); } return; }
+  if (el.type === 'number') { const lim = LIMITS[f.split('.').pop()] || [0, 99]; apply(f, clamp(Math.round(+el.value || 0), ...lim), true); return renderLayerBar(); }
+  if (el.tagName === 'SELECT') { apply(f, el.value, true); return renderLayerBar(); }
+});
+$('#layerBar').addEventListener('keydown', e => { if (e.key === 'Escape' && e.target.dataset.ff) { e.preventDefault(); e.target.blur(); clearField(); } });
+$('#layerBar').addEventListener('click', async e => {
+  const b = e.target.closest('[data-fa]'); if (!b) return;
+  const c = cur(); if (!c) return;
+  const a = b.dataset.fa, v = b.dataset.v;
+  if (a === 'done') return clearField();
+  if (a === 'step') { const p = b.dataset.path, lim = LIMITS[p.split('.').pop()] || [0, 99]; apply(p, clamp((getPath(c, p) ?? 0) + +b.dataset.d, ...lim), true); }
+  if (a === 'randName') apply('name', randomName(c.type), true);
+  if (['type', 'tier', 'family', 'timing'].includes(a)) apply(a, v, true);
+  if (a === 'brand') apply('origin', v, true);
+  if (a === 'newBrand') { const n = await promptText('New brand', 'Brand name (e.g. "Snackforce 2000")'); if (n && addBrand(n)) apply('origin', n, true); }
+  if (a === 'partner') { const list = [...(c.partners || [])], i = list.indexOf(v); i >= 0 ? list.splice(i, 1) : list.push(v); apply('partners', list, true); }
+  if (a === 'interpret') setRulesText($('#layerBar [data-ff="text"]')?.value || '');
+  if (a === 'autoText') apply('textMode', 'auto', true);
+  if (tool.name === 'draw') return;
+  renderLayerBar();
+});
+
 function dockBody(c, L, tab) {
   if (tab === 'transform') return `<div class="dock-row"><span class="dk-group">${dk('alignL', I.alignL, 'Align left')}${dk('alignCH', I.alignCH, 'Centre horizontally')}${dk('alignR', I.alignR, 'Align right')}${dk('alignT', I.alignT, 'Align top')}${dk('alignCV', I.alignCV, 'Centre vertically')}${dk('alignB', I.alignB, 'Align bottom')}</span>
       <span class="dock-note">to the ${L.zone === 'top' ? 'card' : 'art window'}</span><span class="spacer"></span>
@@ -1156,6 +1249,145 @@ function addLayer(L) {
   select(c.layout.layers.at(-1).id); save();
 }
 
+// ---- Draw: sketch straight onto the card. Strokes go into a "drawing" image layer (2 bitmap px per
+// card unit), so a drawing moves, fades, masks and exports like any other picture.
+const BR = { mode: 'pen', size: 6, color: '#171724' };
+try { Object.assign(BR, JSON.parse(lsGet('forge-brush') || '{}')); } catch { }
+const saveBrush = () => lsSet('forge-brush', JSON.stringify(BR));
+const BRUSH_MODES = { pen: ['Pen', I.brush], marker: ['Marker', I.marker], eraser: ['Eraser', I.eraser] };
+const DRAW_PX = 2;
+const drawBitmaps = new Map(); // asset id -> canvas, so a drawing is decoded once, not every stroke
+const overlay = $('#drawOverlay'), octx = overlay.getContext('2d');
+// Where strokes go: the drawing you picked or last drew on, else the card's top drawing layer.
+// "New drawing layer" sets drawId to 'new' so the next stroke starts a fresh one.
+function drawTarget() {
+  const c = cur(); if (!c || ui.drawId === 'new') return null;
+  const usable = l => l.draw && !l.hidden && !l.locked;
+  return c.layout.layers.find(l => l.id === ui.drawId && usable(l)) || (selLayer() && usable(selLayer()) ? selLayer() : null)
+    || [...c.layout.layers].reverse().find(usable) || null;
+}
+function blankDrawing() {
+  const cv = document.createElement('canvas'); cv.width = W * DRAW_PX; cv.height = H * DRAW_PX;
+  const id = newId('d'); P.assets[id] = cv.toDataURL('image/png'); drawBitmaps.set(id, cv); return id;
+}
+async function bitmapFor(L) {
+  let cv = drawBitmaps.get(L.asset); if (cv) return cv;
+  const img = new Image(); img.src = P.assets[L.asset]; await img.decode();
+  cv = document.createElement('canvas'); cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+  cv.getContext('2d').drawImage(img, 0, 0); drawBitmaps.set(L.asset, cv); return cv;
+}
+// Old stroke images nobody can reach any more (not on a card, not in undo history) are dropped.
+function pruneDrawings() {
+  const keep = usedAssets(P), hist = undoStack.concat(redoStack).map(e => e.s).join(' ');
+  for (const id of Object.keys(P.assets)) if (id[0] === 'd' && !keep.has(id) && !hist.includes(id)) { delete P.assets[id]; drawBitmaps.delete(id); }
+}
+const midPt = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+const pressureW = p => 0.35 + 1.3 * clamp(p, 0, 1);
+// One smoothed stroke. map: card point -> canvas point; unit: canvas px per card unit.
+function paintStroke(ctx, pts, map, unit, mode, pen, color = BR.color) {
+  const base = BR.size * unit * (mode === 'marker' ? 2.2 : 1), q = pts.map(map);
+  ctx.save(); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.globalCompositeOperation = mode === 'eraser' ? 'destination-out' : 'source-over';
+  ctx.strokeStyle = ctx.fillStyle = mode === 'eraser' ? '#000' : color;
+  ctx.globalAlpha = mode === 'marker' ? 0.45 : 1;
+  if (q.length === 1) { ctx.beginPath(); ctx.arc(q[0].x, q[0].y, base * (pen ? pressureW(pts[0].p) : 1) / 2, 0, Math.PI * 2); ctx.fill(); }
+  else if (pen && mode === 'pen') {
+    // Pressure: each piece gets its own width, joined at midpoints so it stays smooth.
+    let a = q[0];
+    for (let i = 1; i < q.length; i++) {
+      const b = i < q.length - 1 ? midPt(q[i], q[i + 1]) : q[i];
+      ctx.lineWidth = base * pressureW(pts[i].p); ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.quadraticCurveTo(q[i].x, q[i].y, b.x, b.y); ctx.stroke(); a = b;
+    }
+  } else {
+    ctx.lineWidth = base; ctx.beginPath(); ctx.moveTo(q[0].x, q[0].y);
+    for (let i = 1; i < q.length - 1; i++) { const m = midPt(q[i], q[i + 1]); ctx.quadraticCurveTo(q[i].x, q[i].y, m.x, m.y); }
+    ctx.lineTo(q.at(-1).x, q.at(-1).y); ctx.stroke();
+  }
+  ctx.restore();
+}
+function clearOverlay() { octx.setTransform(1, 0, 0, 1, 0, 0); octx.clearRect(0, 0, overlay.width, overlay.height); }
+function drawPreview(g) {
+  const m = svg.getScreenCTM(), r = $('#stage').getBoundingClientRect(), d = devicePixelRatio || 1;
+  clearOverlay();
+  const map = p => ({ x: (m.a * p.x + m.c * p.y + m.e - r.left) * d, y: (m.b * p.x + m.d * p.y + m.f - r.top) * d });
+  const unit = Math.hypot(m.a, m.b) * d;
+  // The eraser previews as a pink trail; it only cuts once you let go.
+  if (BR.mode === 'eraser') paintStroke(octx, g.points, map, unit, 'pen', false, 'rgba(255,62,165,.5)');
+  else paintStroke(octx, g.points, map, unit, BR.mode, g.pen);
+}
+// Card point -> pixel in the drawing's bitmap, through the layer's own move / scale / spin / mirror.
+function cardToBitmap(L, cv) {
+  const r = -(L.rot || 0) * Math.PI / 180, cos = Math.cos(r), sin = Math.sin(r);
+  const kx = (L.flip ? -1 : 1) * L.scale * (L.sx ?? 1), ky = L.scale * (L.sy ?? 1), bx = cv.width / L.w, by = cv.height / L.h;
+  return p => { const dx = p.x - L.x, dy = p.y - L.y; return { x: ((dx * cos - dy * sin) / kx + L.w / 2) * bx, y: ((dx * sin + dy * cos) / ky + L.h / 2) * by }; };
+}
+function startStroke(e) {
+  const c = cur(); if (!c) return null;
+  const p = toCard(e);
+  let L = drawTarget(), created = false;
+  if (!L) {
+    // A new drawing layer: clipped to the art window when the first stroke starts inside it.
+    const inArt = p.x >= ART.x && p.x <= ART.x + ART.w && p.y >= ART.y && p.y <= ART.y + ART.h;
+    burst = false; snap();
+    L = { id: newId(), kind: 'image', draw: true, asset: blankDrawing(), w: W, h: H, x: W / 2, y: H / 2, scale: 1, rot: 0, opacity: 1, zone: inArt ? 'art' : 'top', name: 'Drawing ' + (c.layout.layers.filter(l => l.draw).length + 1) };
+    c.layout.layers.push(L); created = true; renderStage(); renderLayersPop();
+  }
+  ui.drawId = L.id;
+  const r = $('#stage').getBoundingClientRect(), d = devicePixelRatio || 1;
+  overlay.width = Math.round(r.width * d); overlay.height = Math.round(r.height * d);
+  const pen = e.pointerType === 'pen';
+  const g = { mode: 'draw', id: L.id, pen, created, points: [{ x: p.x, y: p.y, p: pen ? (e.pressure || 0.5) : 0.5 }], ready: bitmapFor(L) };
+  drawPreview(g); renderLayerBar();
+  return g;
+}
+function moveStroke(e) {
+  const evs = e.getCoalescedEvents?.(); // can be empty (synthetic events, some browsers): fall back to the event itself
+  for (const ev of evs?.length ? evs : [e]) { const p = toCard(ev); gest.points.push({ x: p.x, y: p.y, p: gest.pen ? (ev.pressure || 0.5) : 0.5 }); }
+  drawPreview(gest);
+}
+async function commitStroke(g) {
+  const L = cur()?.layout.layers.find(l => l.id === g.id);
+  try {
+    if (!L) return;
+    const cv = await g.ready, kk = L.scale * (Math.abs(L.sx ?? 1) + Math.abs(L.sy ?? 1)) / 2;
+    paintStroke(cv.getContext('2d'), g.points, cardToBitmap(L, cv), cv.width / L.w / kk, BR.mode, g.pen);
+    // Every stroke is its own undo step (the first one also undoes the new drawing layer).
+    if (!g.created) { burst = false; snap(); }
+    const id = newId('d'); P.assets[id] = cv.toDataURL('image/png');
+    drawBitmaps.set(id, cv); L.asset = id;
+    pruneDrawings(); renderStage(); save();
+  } catch (err) { console.error(err); toast("Couldn't save that stroke.", true); }
+  finally { clearOverlay(); }
+}
+function cancelStroke() { clearOverlay(); }
+function drawDock(c) {
+  const t = drawTarget();
+  const where = t ? `on “${esc(layerName(t))}” · ${t.zone === 'top' ? 'over the card' : 'in the art window'}` : 'your first stroke starts a drawing layer';
+  const swatches = BR.mode === 'eraser' ? '' : `<div class="swatches">${[...new Set(['#171724', '#ffffff', ...SWATCHES, accentFor(c)].map(v => v.toLowerCase()))].slice(0, 13).map(v => `<button type="button" class="sw" data-drc="${v}" style="--c:${v}" title="${v}" aria-label="Colour ${v}" aria-pressed="${BR.color.toLowerCase() === v}"></button>`).join('')}
+    <label class="sw sw-any" title="Any colour"><input type="color" data-drs="color" value="${esc(BR.color)}" aria-label="Pick any colour"></label></div>`;
+  return `<div class="dock-head"><span class="thumb">${I.brush}</span><b class="dock-name">Draw</b><span class="dock-note">${where}</span><span class="spacer"></span>${dockMinBtn()}<button type="button" class="dk-done" data-dra="done" title="Done (Esc)">${I.check}<span>Done</span></button></div>
+    <div class="dock-body"><div class="dock-row"><div class="seg-soft" role="group" aria-label="Brush">${Object.entries(BRUSH_MODES).map(([k, [l, ic]]) => `<button type="button" data-dra="mode" data-v="${k}" aria-pressed="${BR.mode === k}"><span class="seg-ic">${ic}</span>${l}</button>`).join('')}</div>
+      <label class="sl dk-size"><span>Size</span><input type="range" data-drs="size" min="1" max="48" step="1" value="${BR.size}"><output>${BR.size}</output></label></div>
+    ${swatches}
+    <div class="dock-row">${dkBtn('newDraw', I.plus, 'New drawing layer').replace('data-la', 'data-dra')}${t ? dkBtn('clearDraw', I.trash, 'Clear this drawing').replace('data-la', 'data-dra') : ''}<span class="dock-note">Zoom in for detail · pen pressure works on tablets · Ctrl+Z undoes a stroke</span></div></div>`;
+}
+$('#layerBar').addEventListener('click', e => {
+  const b = e.target.closest('[data-dra],[data-drc]'); if (!b || tool.name !== 'draw') return;
+  const a = b.dataset.dra;
+  if (b.dataset.drc) { BR.color = b.dataset.drc; if (BR.mode === 'eraser') BR.mode = 'pen'; }
+  if (a === 'done') return setTool('move');
+  if (a === 'mode') BR.mode = b.dataset.v;
+  if (a === 'newDraw') { ui.drawId = 'new'; if (selLayer()?.draw) ui.sel = null; toast('Your next stroke starts a new drawing layer.'); }
+  if (a === 'clearDraw') { const t = drawTarget(); if (t) { snap(); t.asset = blankDrawing(); pruneDrawings(); renderStage(); save(); } }
+  saveBrush(); renderLayerBar();
+});
+$('#layerBar').addEventListener('input', e => {
+  const k = e.target.dataset.drs; if (!k) return;
+  BR[k] = k === 'size' ? +e.target.value : e.target.value;
+  const o = e.target.parentElement.querySelector('output'); if (o) o.textContent = BR.size;
+  saveBrush();
+});
+
 // ---- remove background: flood-fill the edge colour away, so cut-out art gets a clean shape.
 // Works from the untouched original each time (kept in L.orig), so Strength can be re-tuned.
 async function cutOut(L) {
@@ -1211,15 +1443,41 @@ async function fileToAsset(file) {
     return { id, w: cv.width, h: cv.height };
   } finally { URL.revokeObjectURL(url); }
 }
+const picName = f => f.name?.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim().slice(0, 24) || 'Image';
+// A picture laid over the art window, covering it (the player can shrink it or float it over the card).
+function artLayer(a, name) {
+  const ar = a.w / a.h, [w, h] = ar > ART.w / ART.h ? [ART.h * ar, ART.h] : [ART.w, ART.w / ar];
+  return { kind: 'image', asset: a.id, w, h, x: ART.x + ART.w / 2, y: ART.y + ART.h / 2, zone: 'art', name };
+}
 async function addImageLayer(file) {
   if (!cur()) return toast('Make or open a card first, then add art to it.', true);
   try {
-    const a = await fileToAsset(file), ar = a.w / a.h;
-    // Start by covering the art window; the player can shrink it or float it over the card.
-    const [w, h] = ar > 450 / 188 ? [188 * ar, 188] : [450, 450 / ar];
-    addLayer({ kind: 'image', asset: a.id, w, h, x: 250, y: 301, zone: 'art', name: file.name?.replace(/\.[^.]+$/, '').slice(0, 24) || 'Image' });
+    addLayer(artLayer(await fileToAsset(file), picName(file)));
     toast('🖼 Image added — drag it around!');
   } catch (e) { console.error(e); toast("That image couldn't be read.", true); }
+}
+// Library: drop a picture on a card = that card's art (its main art picture is swapped, or one is added).
+async function setCardArt(c, file) {
+  try {
+    const before = libState(), a = await fileToAsset(file), L = artLayer(a, picName(file));
+    const old = c.layout.layers.find(l => l.kind === 'image' && l.zone !== 'top' && !l.draw);
+    if (old) { Object.assign(old, L, { scale: 1, rot: 0 }); for (const k of ['sx', 'sy', 'orig', 'cutTol', 'flip']) delete old[k]; }
+    else c.layout.layers.unshift({ id: newId(), scale: 1, rot: 0, opacity: 1, ...L });
+    save(); renderLibrary(); undoable(`🖼 New art for “${c.name}”`, before);
+  } catch (e) { console.error(e); toast("That image couldn't be read.", true); }
+}
+// Pictures in, characters out: one new card per picture, named after the file.
+async function newCardsFromImages(files) {
+  const made = [];
+  for (const f of files) {
+    try {
+      const c = newCard('CHA', P, picName(f)); c.id = uniqueCardId(c.name, P.cards);
+      c.layout.layers.push({ id: newId(), scale: 1, rot: 0, opacity: 1, ...artLayer(await fileToAsset(f), picName(f)) });
+      addCard(c, false); made.push(c);
+    } catch (e) { console.error(e); toast(`Couldn't read ${f.name}.`, true); }
+  }
+  if (made.length === 1) openEditor(made[0].uid);
+  if (made.length) toast(made.length === 1 ? `🖼 “${made[0].name}” is ready. Tap its text to set the stats.` : `🖼 Made ${made.length} characters from your pictures.`);
 }
 async function stickerPicker() {
   if (!cur()) return toast('Make or open a card first.', true);
@@ -1261,16 +1519,18 @@ function secStats(c) {
   <div class="field"><span class="lbl">Card type</span><div class="seg wide">${segBtn('type', 'CHA', 'Character', c.type)}${segBtn('type', 'ACT', 'Action', c.type)}</div></div>
   ${c.type === 'CHA' ? `
     <div class="field"><span class="lbl">Tier</span><div class="seg wide">${['low', 'mid', 'high'].map(t => segBtn('tier', t, cap(t), c.tier)).join('')}</div></div>
-    <div class="field"><label style="text-transform:none;font-size:13px;color:inherit"><input type="checkbox" data-f="edgelord" ${c.edgelord ? 'checked' : ''}> <b>EXE</b> — Edgelord summon</label></div>`
+    ${c.edgelord ? `<div class="field"><label style="text-transform:none;font-size:13px;color:inherit"><input type="checkbox" data-f="edgelord" checked> Old “Edgelord” tag <span class="muted">(retired, does nothing; untick to clear)</span></label></div>` : ''}`
     : `<div class="field"><span class="lbl">Action family</span><div class="seg wide">${segBtn('family', 'direct', '▲ Direct', c.family)}${segBtn('family', 'control', '⬢ Control', c.family)}</div></div>`}
   <div class="two"><div class="field"><span class="lbl">Cost (SP)</span>${stepper('cost', c.cost, 'Cost')}</div>
   ${c.type === 'CHA' ? `<div class="field"><span class="lbl">HP</span>${stepper('hp', c.hp, 'HP')}</div>` : ''}</div>
   <div class="field"><span class="lbl">Decks</span><div class="chips">${P.folders.map(f => `<button type="button" class="chip" data-folder-toggle="${f.id}" aria-pressed="${c.folders.includes(f.id)}">${f.icon} ${esc(f.name)}</button>`).join('')}<button type="button" class="chip" data-act="newFolder">＋ New deck</button></div></div>
-  <div class="field"><label for="fFlavor">Flavor text</label><textarea id="fFlavor" data-f="flavor" rows="2" maxlength="140" placeholder="A funny one-liner (optional)">${esc(c.flavor || '')}</textarea></div>
+  <div class="field"><label for="fFlavor">Flavor / lore</label><textarea id="fFlavor" data-f="flavor" rows="2" maxlength="140" placeholder="A one-liner printed in italics (optional)">${esc(c.flavor || '')}</textarea></div>
+  <div class="field"><label for="fNote">Designer notes</label><textarea id="fNote" data-f="note" rows="2" placeholder="Lore, ideas, balance notes. Exported with the data, never printed">${esc(c.note || '')}</textarea></div>
+  <details class="adv"><summary>More: art credit, file name, card ID</summary>
   <div class="field"><label for="fArtist">Art credit</label><input type="text" id="fArtist" data-f="artist" value="${esc(c.artist || '')}" maxlength="40" placeholder="Who made the art?"></div>
-  <div class="field"><label for="fNote">Designer notes</label><textarea id="fNote" data-f="note" rows="2" placeholder="For collaborators — exported with the data, never printed">${esc(c.note || '')}</textarea></div>
   <div class="field"><label for="fFile">Export file name</label><input type="text" id="fFile" data-f="fileName" value="${esc(c.fileName || '')}" maxlength="40" placeholder="${esc(c.id)}"><div class="help">Used for this card's PNG files. Blank = the card ID.</div></div>
   <div class="field"><label for="fId">Card ID</label><input type="text" id="fId" data-f="id" value="${esc(c.id)}" maxlength="28"><div class="help">The game's internal key. Follows the name until you edit it.</div></div>
+  </details>
   <div class="btnrow"><button class="btn" data-act="dup">⧉ Duplicate</button><button class="btn" data-act="moveUp">◀ Earlier</button><button class="btn" data-act="moveDown">Later ▶</button><button class="btn danger-btn" data-act="del">🗑 Delete</button></div>`;
 }
 function secBrand(c) {
@@ -1287,7 +1547,7 @@ function secBrand(c) {
   <div class="field"><span class="lbl">Partners — who can Backup this card</span>${chips('partners', partnerPool)}
     <div class="help">Same-brand characters can always Backup each other (except Unassigned).</div></div>
   <div class="field"><div class="inline"><input type="text" id="newTagIn" placeholder="New allegiance, e.g. Gamers" maxlength="24"><button class="btn" data-act="newTag">＋ Add</button></div></div>
-  <div class="idea"><b>🤝 Backup matchmaking</b><div class="small" style="margin-top:4px">Can be backed up by (${backers.length}): ${names(backers)}<br>Can back up (${hosts.length}): ${names(hosts)}</div></div>`;
+  <div class="idea"><b>🤝 Backup matchmaking</b><div class="small" style="margin-top:4px">${BACKUP_RULE}<br>Can be backed up by (${backers.length}): ${names(backers)}<br>Can back up (${hosts.length}): ${names(hosts)}</div></div>`;
 }
 function secAbility(c) {
   const e = c.effect, spec = e && EFFECTS[e.kind];
@@ -1322,8 +1582,8 @@ function secDesign(c) {
     <div class="grad-row"><span class="gl">Border</span><input type="color" data-f="layout.border" value="${esc(L.border)}" aria-label="Border color">${gradToggle('border', L.border2)}</div>
     ${L.accent2 || L.paper2 || L.border2 ? `<label class="slider inline small" style="margin-top:6px">Gradient angle <input type="range" data-f="layout.gradAngle" min="0" max="360" step="5" value="${L.gradAngle ?? 90}"></label>` : ''}
     <div class="two" style="margin-top:8px">${color('ink', 'Ink', L.ink)}${color('sub', 'Small print', L.sub)}</div></div>
-  <div class="field"><span class="lbl">✨ Holographic finish</span><div class="seg wide">${segBtn('layout.holo', 'auto', 'Auto (EXE cards)', L.holo || 'auto')}${segBtn('layout.holo', 'on', 'Always', L.holo)}${segBtn('layout.holo', 'off', 'Off', L.holo)}</div>
-    <div class="help">Rainbow foil + shine. Edgelord (EXE) cards get it automatically.</div></div>
+  <div class="field"><span class="lbl">✨ Holographic finish</span><div class="seg wide">${segBtn('layout.holo', 'off', 'Off', L.holo === 'on' ? 'on' : 'off')}${segBtn('layout.holo', 'on', 'Holo foil', L.holo === 'on' ? 'on' : 'off')}</div>
+    <div class="help">Rainbow foil + shine, for cards you want to stand out.</div></div>
   <div class="field"><label for="fFont">Font</label><select id="fFont" data-f="layout.font">${FONTS.map(f => `<option ${L.font === f ? 'selected' : ''} style="font-family:'${f}'">${f}</option>`).join('')}</select></div>
   <div class="field"><label class="inline" style="text-transform:none;font-size:13px;color:inherit"><input type="checkbox" data-f="layout.grid" ${L.grid !== false ? 'checked' : ''}> Grid lines in the art window</label>
   <label class="inline" style="text-transform:none;font-size:13px;color:inherit;margin-top:6px"><input type="checkbox" data-f="layout.placeholder" ${L.placeholder !== false ? 'checked' : ''}> Brand placeholder when there's no art</label>
@@ -1779,13 +2039,14 @@ async function importFiles(files, dropped = false) {
         const o = JSON.parse(await f.text());
         if (o.format === 'lft-forge') await importProject(o, f.name, dropped);
         else if (o.format === 'lft-card') await importBundle(o);
+        else if (o.format === 'lft-deck') await importProject(lftDeckToProject(o), f.name, dropped, ' (deck file: stats and text, no art)');
         else if (Array.isArray(o)) await importRules(o.map(x => ({ ...x })), f.name);
         else throw new Error('not a Forge file');
       } else if (f.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg)$/.test(n)) {
         const meta = (f.type === 'image/png' || n.endsWith('.png')) ? await extract(f, 'lft-card') : null;
         if (meta) await importBundle(JSON.parse(meta));
         else if (ui.view === 'editor' && cur()) await addImageLayer(f);
-        else toast('To add art: open a card in the Editor, then drop the image onto it.', true);
+        else await newCardsFromImages([f]);
       } else toast(`Not sure what to do with ${f.name}.`, true);
     } catch (e) { console.error(e); toast(`Couldn't open ${f.name}: ${e.message}`, true); }
   }
@@ -1818,20 +2079,20 @@ function mergeProject(inc) {
 function warnIfNewer(o, what) {
   if ((+o?.version || 1) > SAVE_FORMAT) toast(`⚠ ${what} was made with a newer Card Forge (${o.forgeVersion || 'unknown'}). Reload to update before editing, or some details may be lost.`, true);
 }
-async function importProject(o, name, dropped = false) {
+async function importProject(o, name, dropped = false, note = '') {
   warnIfNewer(o, name);
   const inc = upgrade(clone(o));
-  if (!P.cards.length) { resetTo(inc); setView('library'); return toast(`📂 Opened “${inc.setName}” (${inc.cards.length} cards)`); }
+  if (!P.cards.length) { resetTo(inc); setView('library'); return toast(`📂 Opened “${inc.setName}” (${inc.cards.length} cards)${note}`); }
   // Dropping a save of new cards is the quick path: merge it, no dialog. Cards that would overwrite
   // ones you already have still get the Merge / Replace question, so a re-drop can't wipe your art.
   if (dropped && !inc.cards.some(c => P.cards.some(x => x.id === c.id))) {
     const before = libState(), { add } = mergeProject(inc); save(); setView('library');
-    return undoable(`📂 Added ${add} card${add === 1 ? '' : 's'} from “${inc.setName}”`, before);
+    return undoable(`📂 Added ${add} card${add === 1 ? '' : 's'} from “${inc.setName}”${note}`, before);
   }
   const v = await ask({ title: '📂 Open save', body: `<p><b>${esc(name)}</b> — “${esc(inc.setName)}”, ${inc.cards.length} cards.</p><p><b>Merge</b> adds its cards to yours (same card ID = theirs wins, decks with the same name combine). <b>Replace</b> swaps your whole set for theirs.</p>`, buttons: [{ label: 'Cancel', value: '' }, { label: 'Replace my set', value: 'replace' }, { label: 'Merge', value: 'merge', primary: true }] });
   if (!v) return;
   if (v === 'replace') resetTo(inc);
-  else { const { add, upd } = mergeProject(inc); save(); toast(`Merged: ${add} new, ${upd} updated`); }
+  else { const { add, upd } = mergeProject(inc); save(); toast(`Merged: ${add} new, ${upd} updated${note}`); }
   setView('library');
 }
 // Stats/text from a sheet or cards.json; art, style and folders stay from the Forge.
@@ -1894,11 +2155,6 @@ $('#dlTemplate').addEventListener('click', async () => { try { download(await xl
 $('#sheetUrl').addEventListener('change', e => { P.sheet.url = e.target.value.trim(); P.sheet.last = ''; $('#sheetStatus').textContent = P.sheet.url ? 'Linked — press Pull now.' : 'Not linked yet.'; save(); });
 $('#sheetAuto').addEventListener('change', e => { P.sheet.auto = e.target.checked; save(); });
 $('#sheetPull').addEventListener('click', () => { P.sheet.url = $('#sheetUrl').value.trim(); pullSheet(); });
-$('#copyJson').addEventListener('click', async () => {
-  const json = JSON.stringify(P.cards.map(toEngine), null, 2);
-  try { await navigator.clipboard.writeText(json); toast('📋 cards.json copied'); }
-  catch { download(new Blob([json], { type: 'application/json' }), 'cards.json'); }
-});
 async function loadBase() {
   try { const base = await baseProject(); await importProject(base, 'Base game'); }
   catch (e) { console.error(e); toast("Couldn't load the base set here (it ships with the hosted Forge).", true); }
@@ -1991,47 +2247,49 @@ function renderManual() {
   const row = cells => `<tr>${cells.map(c => `<td>${c}</td>`).join('')}</tr>`;
   const table = (head, rows) => `<table class="mtable"><thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.map(row).join('')}</tbody></table>`;
   const sections = [
-    ['start', '🚀 Quick start', `<ol class="steps"><li><b>Make a card</b>: Cards → <b>+ New Character</b> or <b>+ New Action</b>. Stuck? <b>🎲 Roll 5 into the Sandbox</b>.</li>
-      <li><b>Edit it</b>: tap any text on the card (name, cost, HP, banner, rules) and type. The panel on the side has everything else.</li>
+    ['start', '🚀 Quick start', `<ol class="steps"><li><b>Make a card</b>: Cards → <b>+ Character</b> or <b>+ Action</b>, or <b>🖼 From picture</b> to turn pictures into characters. Stuck? <b>🎲</b> rolls a random card.</li>
+      <li><b>Edit it</b>: tap any part of the card (name, cost, HP, brand, ability, rules, partners) and change it in the bar under the card. <b>Draw</b> sketches art right on it. The side panel has everything else.</li>
       <li><b>Put it in a deck</b>: drag it onto a deck (on touch, hold it first). 20 different cards = tournament-legal ✓.</li>
-      <li><b>Share or test it</b>: <b>🕹 Send to playtest</b>, <b>🖨 Print</b>, or Save &amp; Share → <b>Download ZIP</b>.</li></ol>
+      <li><b>Share or test it</b>: <b>🕹 Send to playtest</b> (playtest table or SAGA), <b>🖨 Print</b>, or <b>Share</b> → Download save file.</li></ol>
       <p>Everything saves automatically in this browser. Take a <b>📸 Snapshot</b> or <b>Download save file</b> before big changes.</p>`],
     ['card', '🃏 Anatomy of a card', `<div class="manual-card">${cardSVG(M_SAMPLE(), { project: P, uid: 'man' })}<ol>
-      <li><b>Type line</b>: CHA (Character), ACT (Action), or EDGELORD SUMMON for EXE cards.</li><li><b>Name</b> and <b>cost</b> in SP (0–10).</li>
+      <li><b>Type line</b>: CHA (Character) or ACT (Action).</li><li><b>Name</b> and <b>cost</b> in SP (0–10).</li>
       <li><b>Brand</b> (Origin): where a character comes from. Its logo can sit next to it.</li><li><b>Art window</b>: your art, clipped to this box.</li>
       <li><b>Banner</b>: the ability's trigger words (HEY, I'M HERE! / NAP TIEM! / BIG STINK!).</li><li><b>Rules text</b>, written for you from the ability, plus optional flavor.</li>
       <li><b>Partners</b>: who can Backup this card. <b>HP</b> for characters.</li></ol></div>`],
-    ['types', '🥊 Card types &amp; ability categories', table(['Filter', 'Means'], [['🃏 All', 'Every card'], ['🥊 CHA', 'Characters: stay in the ring, have HP'], ['😈 EXE', 'Edgelord summons: high-tier characters, holographic foil'], ['⚡ ACT', 'Actions: resolve once, then discard']]) +
+    ['types', '🥊 Card types &amp; ability categories', table(['Filter', 'Means'], [['🃏 All', 'Every card'], ['🥊 CHA', 'Characters: stay in the ring, have HP'], ['⚡ ACT', 'Actions: resolve once, then discard']]) +
       table(['Category', 'When it happens'], Object.values(TRIGGERS).map(t => [`${t.icon} ${t.short}`, esc(t.label)]))],
-    ['abilities', '✨ Abilities', `<p>Pick a trigger, an effect, a target and an amount, or type it in plain English in the <b>Ability</b> tab (or straight onto the card) and the Forge maps it for you. If nothing matches, your idea is saved to the card's notes for the team.</p>` +
+    ['abilities', '✨ Abilities &amp; mechanics', `<p>Pick a trigger, an effect, a target and an amount, or type it in plain English (tap the rules text on the card, or use the <b>Mechanics</b> tab) and the Forge maps it for you. If nothing matches, your idea is saved to the card's notes for the team.</p>` +
       table(['Effect', 'Can target'], Object.entries(EFFECTS).map(([k, e]) => [esc(e.label), e.targets.map(t => esc(TARGET_LABELS[t])).join(', ')])) +
       table(['Passive trait', ''], Object.entries(PASSIVES).filter(([k]) => k).map(([, v]) => [esc(v), ''])) +
       `<p class="muted small">These are exactly the effects the game engine runs today (checked automatically on every release).</p>`],
-    ['brands', '🏷 Brands, allegiances &amp; Backups', `<p><b>Brands</b> (Origins) group characters; same-brand characters can Backup each other (except Unassigned). <b>Allegiances</b> are tags like Pets or Snacks. A card's <b>Partners</b> list which allegiances can attach to it as a Backup. The <b>Brand</b> tab in the editor shows who can Backup whom. Brand logos must be a PNG with a transparent background, or an SVG.</p>`],
+    ['brands', '🏷 Brands, allegiances &amp; Backups', `<p><b>Brands</b> (Origins) group characters; same-brand characters can Backup each other (except Unassigned). <b>Allegiances</b> are tags like Pets or Snacks. A card's <b>Partners</b> list which allegiances can attach to it as a Backup. ${BACKUP_RULE} The <b>Brand</b> tab in the editor shows who can Backup whom. Brand logos must be a PNG with a transparent background, or an SVG.</p>`],
     ['decks', '📚 Decks, Sandbox &amp; Trash', `<ul><li>A card can be in several decks. Each deck shows <b>x/20</b> and turns ✓ at 20 cards with different names.</li>
       <li>Drag cards onto a deck in the sidebar, onto a deck stack, or onto the tray that slides up while dragging. Dropping asks <b>Add</b> (same card, both places), <b>Move</b> (out of the deck you're in) or <b>Duplicate</b> (independent copy).</li>
       <li>Pick up many: on touch, hold a card and let go to select, then tap more (or tap cards with a second finger mid-drag). On PC, Ctrl/⌘-click, Shift-click, or drag a box.</li>
-      <li>Open a deck to see its <b>cost curve</b> and <b>brand mix</b>, and to mark it as the <b>🔴 Red</b> or <b>🔵 Blue</b> deck for the TTS game.</li>
+      <li>Open a deck to see its <b>cost curve</b>, <b>brand mix</b> and whether it's legal. Its <b>⋯ Deck</b> menu renames, exports, snapshots, duplicates or deletes it (and sets the legacy Tabletop Simulator Red/Blue deck).</li>
       <li><b>🧪 Sandbox</b>: a scratch deck for random experiments. It never counts toward a deck.</li>
       <li><b>🗑 Trash</b>: deleted cards wait ${TRASH_DAYS} days. Most library actions also show <b>↶ Undo</b> for a few seconds.</li></ul>`],
     ['art', '🎨 Art &amp; design', `<ul><li>The <b>tool rail</b> left of the card adds an <b>Image</b>, <b>Text</b>, <b>Shapes</b> &amp; stickers or your brand <b>Logo</b>. Drag to move, white corners resize (keeping proportions), square side handles stretch one way, <b>Shift</b> + corner stretches freely, yellow dot spins; pinch on touch, scroll wheel on PC. Exact <b>W / H %</b> live under Transform. Pink guides show when a layer snaps to the centre or the art window.</li>
-      <li><b>Windows</b>: minimise the tool rail (top dash) or the options dock (arrow), hide the side panel with the focus button in the editor bar, or go <b>Full canvas</b> (F). <b>Details ›</b> brings the panels back.</li>
+      <li><b>Pictures</b>: <b>🖼 From picture</b> in Cards makes one character per picture. Drop a picture on a card in Cards to make it that card's art, or anywhere else for new characters. In the editor, tap an empty art window, drop, or paste.</li>
+      <li><b>Draw</b> (B): pen (pressure works on tablets), marker and eraser (E), with size and colour in the bar under the card. Strokes land in a drawing layer you can move, fade or switch between the art window and over the card. Every stroke is one undo.</li>
+      <li><b>Windows</b>: minimise the tool rail (top dash) or the options bar (arrow), or go <b>Full canvas</b> (F). <b>Details ›</b> brings the panels back.</li>
       <li><b>Zoom</b>: pinch, Ctrl + scroll or the zoom pill. <b>Pan</b>: the hand tool, Space + drag, or drag empty space while zoomed.</li>
       <li><b>Layers</b> panel: drag the dots to restack, hide 👁, lock 🔒, double-click to rename, and set opacity and blend mode (Multiply, Screen, Overlay…).</li>
       <li>The <b>dock</b> under the card changes with your selection. <b>Transform</b>: align buttons, Fill / Fit / Center, size, spin, opacity. <b>Style</b>: colour swatches, fonts, outlines, shape picker, masks and <b>✨ Remove background</b> (best on plain backgrounds; Strength tunes it, Original undoes it). <b>Adjust</b>: brightness, contrast, saturation, hue. <b>Effects</b>: drop shadow, glow, sticker outline.</li>
-      <li><b>Design</b> tab: style presets, colors, gradients, fonts, holographic foil (automatic for EXE). The rules check warns when text gets hard to read.</li>
+      <li><b>Design</b> tab: style presets, colors, gradients, fonts and holo foil. The rules check warns when text gets hard to read.</li>
       <li><b>Brands</b> tab → Set Info: the set name printed on every card and the <b>card back</b> design.</li>
-      <li>Workspace buttons (top of the editor): swap sides, change the backdrop, focus mode; drag the panel edge to resize it on PC.</li></ul>`],
+      <li>On PC, drag the side panel's edge to resize it.</li></ul>`],
     ['share', '📦 Saving, sharing &amp; testing', table(['Want to…', 'Use', 'You get'], [
       ['Hand one card to someone', 'Editor → <b>Share card</b>', 'A PNG with the card data hidden inside; drop it into any Forge'],
-      ['Move your whole set / back up', 'Save &amp; Share → <b>Download save file</b>', '<code>.lftset.json</code>; open it anywhere to merge or replace'],
-      ['Playtest online', 'Open a deck → <b>🕹 Send to playtest</b>', '<code>.lftdeck.json</code> with card art; on the table: DECK → Load a deck → Import deck file'],
+      ['Move your whole set / back up', 'Share → <b>Download save file</b>', '<code>.lftset.json</code>; open it anywhere to merge or replace'],
+      ['Playtest online', 'Open a deck → <b>🕹 Send to playtest</b>', '<code>.lftdeck.json</code> with card art; drop it on SAGA, or on the playtest table: DECK → Load a deck → Import deck file. Opening it in a Forge brings back the cards (not the art)'],
       ['Playtest on paper', '<b>🖨 Print</b> (deck, selection, or all)', '9 real-size cards per page with cut lines'],
-      ['Tabletop Simulator', 'Save &amp; Share → <b>Download ZIP</b>', 'Deck sheet + back for a custom deck, and <code>data/cards.json</code> / <code>decks.json</code> for the scripted mod'],
-      ['Work in a spreadsheet', 'Save &amp; Share → Spreadsheet', 'Excel template or CSV; drop it back in, stats update and art stays; or link a Google Sheet'],
-      ['Undo a big mistake', 'Save &amp; Share → <b>📸 Snapshots</b>', 'Roll back to any snapshot; the Forge also keeps automatic and pre-update backups'],
+      ['Tabletop Simulator (legacy)', 'Share → Export everything (ZIP), tick the TTS option', 'Deck sheet + back for a custom deck, and <code>data/cards.json</code> / <code>decks.json</code> for the scripted mod'],
+      ['Work in a spreadsheet', 'Share → Spreadsheet', 'Excel template or CSV; drop it back in, stats update and art stays; or link a Google Sheet'],
+      ['Undo a big mistake', 'Share → <b>📸 Snapshots</b>', 'Roll back to any snapshot; the Forge also keeps automatic and pre-update backups'],
     ])],
-    ['keys', '⌨ Shortcuts', table(['Keys', 'Does'], [['Ctrl/⌘ + Z · Ctrl/⌘ + Y', 'Undo · redo (editor)'], ['Arrow keys (+Shift)', 'Nudge the selected layer 1 (10) px'], ['Delete / Backspace', 'Delete the selected layer'], ['Ctrl/⌘ + D', 'Duplicate the selected layer'], ['V · H', 'Move tool · pan tool (or hold Space)'], ['I · T · S', 'Add image · text · shape'], ['L', 'Show / hide Layers'], ['F', 'Full canvas: hide everything but the card (F or Esc to exit)'], ['[ · ]', 'Send backward · bring forward'], ['Ctrl/⌘ + + / − / 0', 'Zoom the card in / out / fit (editor)'], ['Alt while dragging', 'Move without snapping'], ['Esc', 'Deselect / close help'], ['Ctrl/⌘ + scroll', 'Zoom the card grid'], ['Ctrl/⌘-click · Shift-click', 'Pick cards · pick a range']])],
+    ['keys', '⌨ Shortcuts', table(['Keys', 'Does'], [['Ctrl/⌘ + Z · Ctrl/⌘ + Y', 'Undo · redo (editor)'], ['Arrow keys (+Shift)', 'Nudge the selected layer 1 (10) px'], ['Delete / Backspace', 'Delete the selected layer'], ['Ctrl/⌘ + D', 'Duplicate the selected layer'], ['V · H', 'Move tool · pan tool (or hold Space)'], ['B · E', 'Draw · eraser'], ['I · T · S', 'Add image · text · shape'], ['L', 'Show / hide Layers'], ['F', 'Full canvas: hide everything but the card (F or Esc to exit)'], ['[ · ]', 'Send backward · bring forward'], ['Ctrl/⌘ + + / − / 0', 'Zoom the card in / out / fit (editor)'], ['Alt while dragging', 'Move without snapping'], ['Esc', 'Deselect, leave a card-text field or the brush, close help'], ['Ctrl/⌘ + scroll', 'Zoom the card grid'], ['Ctrl/⌘-click · Shift-click', 'Pick cards · pick a range']])],
     ['faq', '❓ Questions', `<dl><dt>Where are my cards stored?</dt><dd>In this browser on this device. Other devices and browsers don't see them until you open a save file there.</dd>
       <dt>The page says a new version is out.</dt><dd>Press <b>Reload now</b>. Your work is saved, and a backup is taken before any upgrade.</dd>
       <dt>It says the Forge is open in another tab.</dt><dd>Use one tab at a time; a tab that falls behind stops saving so it can't overwrite newer work.</dd>
@@ -2047,21 +2305,20 @@ $('#manualBody').addEventListener('click', e => { const a = e.target.closest('.m
 // ---------------------------------------------------------------- help overlay
 const HELP = {
   library: { title: 'Your card library', flow: 0, steps: [
-    ['.newrow', 'Make a card', 'Start a Character or an Action. Stuck? 🎲 roll random ones into the 🧪 Sandbox, keep the fun ones, clear the rest.'],
+    ['.newrow', 'Make a card', 'Start a Character or an Action, or turn pictures into characters with 🖼 From picture (dropping pictures on the page works too). 🎲 rolls a random card to riff on.'],
     ['#folders', 'Decks', 'Group cards into decks. 20 cards with different names is tournament-legal (you’ll see a ✓). A card can be in several decks.'],
-    ['#grid', 'Tap to edit · drag into decks', 'Tap a card to edit it. Drag it onto a deck (on touch, hold it first). Pick up several: hold to select then tap more, tap other cards with a second finger while dragging, or Ctrl/Shift-click and drag a box on PC.'],
-    ['#zoom', 'Zoom', 'Make cards bigger or smaller (Ctrl + scroll works on PC). Decks show up as stacks you can open.'],
+    ['#grid', 'Tap to edit · drag into decks', 'Tap a card to edit it. Drag it onto a deck (on touch, hold it first). Drop a picture on a card to make it that card’s art.'],
+    ['.libbar', 'Find stuff', 'Search, show only CHA or ACT, or open ⚙ Filters for tier, brand, allegiance, ability and sort.'],
     ['#selectBtn', 'Select several', 'Add many cards to a deck, duplicate, export or delete them at once.'],
-    ['.filters', 'Find stuff', 'Search, or filter by type, tier, brand or allegiance.'],
   ] },
   editor: { title: 'Designing a card', flow: 1, steps: [
-    ['#stage', 'Edit right on the card', 'Tap the name, cost, HP, banner or rules text to type into it. Drag art to move it; white corners resize, the yellow dot spins.'],
-    ['#toolRail', 'Tools', 'Add your own image, text, shapes & stickers or your brand logo (or drop / paste a picture onto the card). Pinch or Ctrl + scroll zooms; the hand or Space + drag pans.'],
+    ['#stage', 'Tap the card to change it', 'Tap the name, cost, HP, brand, ability, rules or partners and edit them in the bar under the card. Tap an empty art window to add a picture. Drag art to move it; white corners resize, the yellow dot spins.'],
+    ['#toolRail', 'Tools', 'Draw and erase right on the card, or add an image, text, shapes & stickers or your brand logo (dropping or pasting a picture works too). Pinch or Ctrl + scroll zooms; the hand or Space + drag pans.'],
     ['#layersBtn', 'Layers', 'Every image, text and sticker is a layer. Drag the dots to restack, hide or lock layers, set opacity and blend modes, double-click to rename.'],
-    ['#layerBar', 'Tool options', 'Whatever you select gets its own options: align, colours, remove background, shadow, glow and sticker outlines.'],
-    ['#sectabs', 'Card details', 'Stats, brand, ability, colors, gradients and holo foil. Art layers live in the Layers panel on the canvas.'],
+    ['#layerBar', 'Options bar', 'Shows what you tapped: card text fields, brush settings while drawing, or align, colours, remove background and effects for art.'],
+    ['#sectabs', 'Card details', 'Stats, brand, mechanics, colors and holo foil, all in one place.'],
     ['#checks', 'Rules check', 'Warns you if the card breaks a rule or looks unbalanced.'],
-    ['#edLayout', 'Your workspace', 'Swap sides, change the backdrop, or go full focus. On PC, drag the edge of the side panel to resize it.'],
+    ['#zenBtn', 'Full canvas', 'Hide everything but the card (F). On PC, drag the edge of the side panel to resize it.'],
     ['#shareCardBtn', 'Share one card', 'Makes a picture with the card data hidden inside. Anyone can drop it into their Forge to keep editing.'],
   ] },
   brands: { title: 'Brands & allegiances', flow: 0, steps: [
@@ -2073,10 +2330,10 @@ const HELP = {
     ['.mtoc', 'Jump to a topic', 'Everything the Forge does, in one place. Tap a topic to jump there.'],
   ] },
   share: { title: 'Saving & sharing', flow: 2, steps: [
-    ['#pSave', 'Your save', 'Autosaves in this browser. Download a save file to switch devices or hand work to a teammate.'],
-    ['#pSheet', 'Spreadsheets', 'Type cards in Excel or Google Sheets and drop the file here, or link a Google Sheet for live updates.'],
-    ['#pZip', 'Export everything', 'One ZIP with card images, a Tabletop Simulator deck and the game data.'],
-    ['#pVersions', 'Snapshots & backups', 'Take a 📸 snapshot of your set or a deck before big changes, roll back any time, or download every snapshot as one archive.'],
+    ['#dlPlay', 'Playtest it', 'One file with every deck and its card art. Drop it on the playtest table or SAGA.'],
+    ['#printAll', 'Print it', 'Real-size cards, 9 per page, ready to cut out.'],
+    ['#dlSave', 'Keep a copy', 'Autosave keeps your cards in this browser. A save file moves them to another device or a teammate.'],
+    ['#pSheet', 'More options', 'Spreadsheets, the full ZIP export, snapshots and the app install live in these folding panels.'],
   ] },
 };
 const flowArt = active => `<svg class="help-flow" viewBox="0 0 330 74" aria-hidden="true">${['MAKE', 'STYLE', 'SHARE'].map((t, i) => `
@@ -2165,24 +2422,13 @@ $('#grid').addEventListener('click', e => {
   if (justDragged) return;
   const nb = e.target.closest('[data-new]'); if (nb) return newFromButton(nb.dataset.new);
   const act = e.target.closest('[data-act]')?.dataset.act;
-  if (act === 'clearFilters') { Object.assign(ui.f, { q: '', type: 'all', tier: 'all', brand: 'all', tag: 'all', trig: 'all' }); $('#q').value = ''; $('#fTrig').value = 'all'; $('#fTier').value = 'all'; return renderLibrary(); }
+  if (act === 'clearFilters') return clearFilters();
   if (act === 'loadBase') return loadBase();
   if (act === 'openHelp') return openHelp();
   const tr = e.target.closest('[data-trash-restore]'); if (tr) return restoreFromTrash([+tr.dataset.trashRestore]);
   const td = e.target.closest('[data-trash-del]');
   if (td) { const t = P.trash[+td.dataset.trashDel]; if (t) { P.trash.splice(+td.dataset.trashDel, 1); save(); renderLibrary(); toast(`“${t.card.name}” deleted for good.`); } return; }
-  const gd = e.target.closest('[data-game]');
-  if (gd) {
-    const fo = P.folders.find(x => x.id === ui.folder), side = gd.dataset.game; if (!fo) return;
-    const before = libState();
-    for (const k of ['Red', 'Blue']) if (P.gameDecks[k] === fo.id) P.gameDecks[k] = '';
-    if (side) P.gameDecks[side] = fo.id;
-    save(); renderLibrary();
-    const s = deckStatus(fo.id);
-    return undoable(side ? `${side === 'Red' ? '🔴' : '🔵'} “${fo.name}” is the ${side} deck${s.legal ? '' : ` (not legal yet: ${s.note})`}.` : `“${fo.name}” is no longer a game deck.`, before);
-  }
   if (act === 'roll5') return rollSandbox(5);
-  if (act === 'hideTip') { lsSet('forge-tip-sandbox', '1'); return renderLibrary(); }
   const ef = e.target.closest('[data-edit-folder]'); if (ef) return editFolder(ef.dataset.editFolder);
   const of = e.target.closest('[data-open-folder]'); if (of) { ui.folder = of.dataset.openFolder; ui.picked.clear(); renderLibrary(); window.scrollTo({ top: 0 }); return; }
   const t = e.target.closest('.tile'); if (!t) return;
@@ -2196,7 +2442,9 @@ $('#grid').addEventListener('click', e => {
   if (ui.selecting) { ui.picked.has(t.dataset.uid) ? ui.picked.delete(t.dataset.uid) : ui.picked.add(t.dataset.uid); ui.lastPick = t.dataset.uid; renderLibrary(); }
   else openEditor(t.dataset.uid);
 });
-$('#filterToggle').addEventListener('click', e => { const open = $('#filters').classList.toggle('open'); e.currentTarget.setAttribute('aria-expanded', open); if (open) $('#q').focus(); });
+$('#moreFilters').addEventListener('click', e => { const f = $('#filters'); f.hidden = !f.hidden; e.currentTarget.setAttribute('aria-expanded', !f.hidden); });
+function clearFilters() { Object.assign(ui.f, { q: '', type: 'all', tier: 'all', brand: 'all', tag: 'all', trig: 'all', sort: 'num' }); for (const [id, v] of [['#q', ''], ['#fTrig', 'all'], ['#fTier', 'all'], ['#fSort', 'num']]) $(id).value = v; renderLibrary(); }
+$('#clearFilters').addEventListener('click', clearFilters);
 $('#newCha').addEventListener('click', () => newFromButton('CHA'));
 $('#newAct').addEventListener('click', () => newFromButton('ACT'));
 $('#surprise').addEventListener('click', surprise);
@@ -2207,6 +2455,8 @@ $('#redoBtn').addEventListener('click', () => undoRedo(redoStack, undoStack));
 $('#pngBtn').addEventListener('click', async () => { const c = cur(); if (c) { download(await cardPNG(c, 2), `${fileBase(c)}.png`); toast('⬇ PNG downloaded (1000×1400)'); } });
 $('#shareCardBtn').addEventListener('click', shareCard);
 $('#imgPick').addEventListener('change', e => { const f = e.target.files[0]; if (f) addImageLayer(f); e.target.value = ''; });
+$('#fromPic').addEventListener('click', () => $('#cardPicPick').click());
+$('#cardPicPick').addEventListener('change', e => { const fs = [...e.target.files]; e.target.value = ''; if (fs.length) newCardsFromImages(fs); });
 $('#filePick').addEventListener('change', e => { importFiles([...e.target.files]); e.target.value = ''; });
 
 let dragDepth = 0;
@@ -2214,10 +2464,28 @@ const hasFiles = e => e.dataTransfer?.types?.includes('Files');
 addEventListener('dragenter', e => { if (hasFiles(e)) { dragDepth++; document.body.classList.add('dragging'); } });
 addEventListener('dragleave', e => { if (hasFiles(e) && --dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('dragging'); } });
 addEventListener('dragover', e => { if (hasFiles(e)) e.preventDefault(); });
-addEventListener('drop', e => { if (!e.dataTransfer?.files?.length) return; e.preventDefault(); dragDepth = 0; document.body.classList.remove('dragging'); importFiles([...e.dataTransfer.files], true); });
+const isPic = f => f.type.startsWith('image/') && !/\.lftcard\.png$/i.test(f.name);
+addEventListener('drop', e => {
+  if (!e.dataTransfer?.files?.length) return;
+  e.preventDefault(); dragDepth = 0; document.body.classList.remove('dragging'); $$('.tile.drop').forEach(t => t.classList.remove('drop'));
+  const files = [...e.dataTransfer.files];
+  // Plain pictures in the library: on a card = its art, anywhere else = new characters.
+  if (ui.view === 'library' && files.every(isPic)) {
+    const tile = e.target.closest?.('.tile'), c = tile && P.cards.find(x => x.uid === tile.dataset.uid);
+    return c ? setCardArt(c, files[0]) : newCardsFromImages(files);
+  }
+  importFiles(files, true);
+});
+$('#grid').addEventListener('dragover', e => {
+  if (!hasFiles(e)) return;
+  const t = e.target.closest('.tile');
+  $$('.tile.drop').forEach(x => x !== t && x.classList.remove('drop')); t?.classList.add('drop');
+});
 addEventListener('paste', e => {
   const f = [...(e.clipboardData?.files || [])].find(x => x.type.startsWith('image/'));
-  if (f && ui.view === 'editor' && !/INPUT|TEXTAREA/.test(document.activeElement?.tagName)) { e.preventDefault(); importFiles([f]); }
+  if (!f || /INPUT|TEXTAREA/.test(document.activeElement?.tagName)) return;
+  if (ui.view === 'editor') { e.preventDefault(); importFiles([f]); }
+  else if (ui.view === 'library') { e.preventDefault(); newCardsFromImages([f]); }
 });
 addEventListener('keydown', e => {
   if (e.key === 'Escape' && !$('#help').hidden) return closeHelp();
@@ -2232,11 +2500,16 @@ addEventListener('keydown', e => {
   if (e.key === ' ') { e.preventDefault(); if (!tool.space) { tool.space = true; setTool(tool.name); } return; }
   // Paint-app single-key tools.
   if (!mod && !e.altKey) {
-    const tk = { f: () => toggleZen(), v: () => setTool('move'), h: () => setTool('hand'), i: () => $('#imgPick').click(), t: addText, s: stickerPicker, l: () => toggleLayers() }[e.key.toLowerCase()];
+    const tk = { f: () => toggleZen(), v: () => setTool('move'), h: () => setTool('hand'), b: () => { BR.mode = BR.mode === 'eraser' ? 'pen' : BR.mode; setTool('draw'); renderLayerBar(); }, e: () => { BR.mode = 'eraser'; setTool('draw'); renderLayerBar(); }, i: () => $('#imgPick').click(), t: addText, s: stickerPicker, l: () => toggleLayers() }[e.key.toLowerCase()];
     if (tk) { e.preventDefault(); return tk(); }
   }
   const L = selLayer();
-  if (!L) { if (e.key === 'Escape' && ED.zen) toggleZen(false); return; }
+  if (!L) {
+    if (e.key === 'Escape' && tool.name === 'draw') return setTool('move');
+    if (e.key === 'Escape' && ui.field) return clearField();
+    if (e.key === 'Escape' && ED.zen) toggleZen(false);
+    return;
+  }
   const step = e.shiftKey ? 10 : 1, mv = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
   if (mv && !L.locked) { e.preventDefault(); snap(); L.x += mv[0]; L.y += mv[1]; updateLayerDOM(L); save(); }
   else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); layerAction('del'); }

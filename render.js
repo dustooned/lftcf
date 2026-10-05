@@ -75,8 +75,9 @@ export function brandShape(c, project) {
   return project?.brands?.find(b => b.name === c.origin)?.shape || 'circle';
 }
 const brandOf = (c, project) => c.type === 'CHA' ? project?.brands?.find(b => b.name === c.origin) : null;
-// Edgelord (EXE) cards get the holographic finish unless the designer turns it off.
-export const isHolo = c => c.layout?.holo === 'on' || ((c.layout?.holo ?? 'auto') === 'auto' && c.type === 'CHA' && !!c.edgelord);
+// Holographic finish is a design choice per card. (It used to switch on for Edgelord cards, a term
+// the game has retired; the old `edgelord` flag stays in saves but no longer changes the look.)
+export const isHolo = c => c.layout?.holo === 'on';
 export const MASKS = { none: 'No mask', circle: 'Circle', rounded: 'Rounded', hexagon: 'Hexagon', star5: 'Star', heart: 'Heart', diamond: 'Diamond' };
 // Layer blend modes (CSS mix-blend-mode, which SVG-to-PNG export honours too) and layer effects.
 export const BLENDS = { normal: 'Normal', multiply: 'Multiply', screen: 'Screen', overlay: 'Overlay', 'soft-light': 'Soft light', 'hard-light': 'Hard light', darken: 'Darken', lighten: 'Lighten', 'color-dodge': 'Color dodge', 'color-burn': 'Color burn', difference: 'Difference', hue: 'Hue', color: 'Color', luminosity: 'Luminosity' };
@@ -170,7 +171,10 @@ export function handlesMarkup(L, k = 1) {
 export const EDIT_REGIONS = {
   name: [24, 24, 372, 125], cost: [398, 26, 70, 70], origin: [24, 154, 400, 46],
   banner: [24, 404, 452, 36], text: [24, 440, 452, 150], hp: [356, 634, 120, 42],
+  partners: [24, 598, 330, 46], art: [ART.x, ART.y, ART.w, ART.h],
 };
+// Which tap targets a card shows: HP and Partners only on characters, "add art" only while the art window is empty.
+const regionShown = (k, c, hasArt) => (k !== 'hp' && k !== 'partners' || c.type === 'CHA') && (k !== 'art' || !hasArt);
 
 // ctx: { project, index, uid, href(assetId)->url, sel (layer id), editing }
 export function cardInner(c, ctx) {
@@ -179,7 +183,7 @@ export function cardInner(c, ctx) {
   const layers = L.layers || [], artLayers = layers.filter(l => l.zone !== 'top'), topLayers = layers.filter(l => l.zone === 'top');
   const hasArt = artLayers.some(l => !l.hidden);
   const initials = String(c.name || '?').split(/\s+/).filter(Boolean).slice(0, 2).map(s => s[0]).join('').toUpperCase();
-  const typeLine = c.type + (c.type === 'CHA' && c.edgelord ? ' / EDGELORD SUMMON' : '');
+  const typeLine = c.type;
   const name = fit(c.name || 'Untitled', 29, 22, 2, 18);
   const originLine = c.type === 'CHA' ? (c.origin || 'Unassigned') : String(c.family || 'direct').toUpperCase() + ' EFFECT';
   const brand = brandOf(c, ctx.project), logo = brand?.logo && href(brand.logo), badge = logo && L.badge !== false;
@@ -216,8 +220,8 @@ export function cardInner(c, ctx) {
     <path d="${sheen}" fill="#fff" opacity=".18" clip-path="url(#head-${uid})"/>
     <rect x="15" y="15" width="470" height="670" rx="16" fill="none" stroke="url(#holo-${uid})" stroke-width="6"/>` : '';
   const holoFx = holo ? `<g pointer-events="none" clip-path="url(#art-${uid})"><rect x="${ART.x}" y="${ART.y}" width="${ART.w}" height="${ART.h}" fill="url(#holo-${uid})" opacity=".3"/><path d="${sheen}" fill="#fff" opacity=".16"/></g>` : '';
-  const hits = ctx.editing ? `<g class="edit-hits">${Object.entries(EDIT_REGIONS).filter(([k]) => k !== 'hp' || c.type === 'CHA').map(([k, [x, y, w, h]]) =>
-    `<rect data-edit="${k}" x="${x}" y="${y}" width="${w}" height="${h}" rx="8" fill="transparent"><title>Tap to edit</title></rect>`).join('')}</g>` : '';
+  const hits = ctx.editing ? `<g class="edit-hits">${Object.entries(EDIT_REGIONS).filter(([k]) => regionShown(k, c, hasArt)).map(([k, [x, y, w, h]]) =>
+    `<rect data-edit="${k}" x="${x}" y="${y}" width="${w}" height="${h}" rx="8" fill="transparent"${ctx.field === k ? ' class="on"' : ''}><title>${k === 'art' ? 'Tap to add a picture' : 'Tap to edit'}</title></rect>`).join('')}</g>` : '';
 
   return `<defs><clipPath id="art-${uid}"><rect x="${ART.x}" y="${ART.y}" width="${ART.w}" height="${ART.h}"/></clipPath>
     <clipPath id="card-${uid}"><rect width="${W}" height="${H}"/></clipPath><clipPath id="head-${uid}"><rect x="24" y="24" width="452" height="125" rx="10"/></clipPath>

@@ -1,7 +1,7 @@
 // Pure project logic: loading/sanitising saves, deck legality, readability, and the data half
 // of exports. No DOM here, so tools/test-forge.mjs can exercise all of it in Node.
 import { SHAPES, MASKS, BLENDS, LAYER_FX, accentFor } from './render.js';
-import { defaultLayout, normalize, newId, validate, toEngine } from './model.js';
+import { defaultLayout, normalize, newId, validate, toEngine, fromEngine } from './model.js';
 import { VERSION, SAVE_FORMAT } from './version.js';
 
 export const SAFE_ID = { test: v => typeof v === 'string' && /^[\w-]{1,32}$/.test(v) }; // a bare regex would accept undefined as "undefined"
@@ -24,6 +24,7 @@ export function cleanLayer(L) {
   if (L.locked) o.locked = true;
   for (const k of ['sx', 'sy']) if (L[k] != null && num(L[k], 1) !== 1) o[k] = clamp(num(L[k], 1), 0.02, 50);
   if (L.label) o.label = String(L.label).slice(0, 40);
+  if (L.draw && L.kind === 'image') o.draw = true;
   if (BLENDS[L.blend] && L.blend !== 'normal') o.blend = L.blend;
   if (LAYER_FX[L.fx] && L.fx !== 'none') Object.assign(o, { fx: L.fx, fxColor: hex(L.fxColor, ''), fxSize: clamp(num(L.fxSize, 1), 0.2, 3) });
   if (L.kind === 'image') {
@@ -127,4 +128,25 @@ export function playtestDeckData(p, decks) {
     decks: decks.map(d => ({ id: d.id, name: `${d.icon || ''} ${d.name}`.trim(), cards: p.cards.filter(c => c.folders.includes(d.id)).map(c => c.id) })),
     cards: cards.map(toEngine),
   };
+}
+
+// ---- reading a .lftdeck.json back in
+/** A playtest deck file ("Send to playtest") as a project: decks, cards, stats, text, flavor and
+ *  notes. The art inside is each card's finished face (layers can't be pulled back out of it), so
+ *  it is not imported; brand colours, accents and banner words aren't in the file either. */
+export function lftDeckToProject(o) {
+  if (o?.format !== 'lft-deck') throw new Error('not a playtest deck file');
+  const decks = (Array.isArray(o.decks) ? o.decks : []).filter(d => d && typeof d === 'object');
+  const folders = decks.map((d, i) => {
+    const m = String(d.name ?? '').match(/^(\p{Extended_Pictographic}\uFE0F?)\s*(.*)$/u);
+    const icon = m && FOLDER_ICONS.includes(m[1]) ? m[1] : '📁';
+    return { id: SAFE_ID.test(d.id) ? d.id : 'deck' + i, name: (m ? m[2] : String(d.name ?? '')).trim() || 'Deck', icon };
+  });
+  const cards = (Array.isArray(o.cards) ? o.cards : []).filter(c => c && typeof c === 'object' && c.name).map(raw => {
+    const c = fromEngine(raw);
+    c.folders = folders.filter((_, i) => Array.isArray(decks[i].cards) && decks[i].cards.includes(c.id)).map(f => f.id);
+    return c;
+  });
+  if (!cards.length) throw new Error('that deck file has no cards in it');
+  return upgrade({ setName: String(o.setName || 'Imported deck'), folders, cards });
 }

@@ -36,4 +36,7 @@ export const I = {
   alignCV: s('<path d="M3 12h18"/><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="8" width="4" height="8" rx="1"/>'),
   alignB: s('<path d="M3 20h18"/><rect x="6" y="5" width="4" height="12" rx="1"/><rect x="14" y="10" width="4" height="7" rx="1"/>'),
   card: s('<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M5 8h14"/>'),
+  brush: s('<path d="M15 4.5l4.5 4.5L9.5 19H5v-4.5z"/><path d="M12.5 7l4.5 4.5"/>'),
+  marker: s('<path d="M7 17l-2.5 3.5H9l1.5-1.5"/><path d="M7 17l7.5-12.5 4.5 2.6L12 19.5z"/>'),
+  eraser: s('<path d="M9 20h11"/><path d="M5.6 14.4l8-8a2 2 0 012.8 0l2.2 2.2a2 2 0 010 2.8L12 18H9.2z"/><path d="M9 10.9l5.1 5.1"/>'),
 };

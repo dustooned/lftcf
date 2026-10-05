@@ -2,12 +2,23 @@
 // can say which build they're on and anyone can find it again (the lftcf repo tags each one).
 // Bump SAVE_FORMAT only when the saved data shape changes in a way older Forges can't read,
 // and add a migration in upgrade().
-export const VERSION = '0.8.3';
-export const CODENAME = 'Studio';
-export const RELEASED = '2026-10-02';
+export const VERSION = '0.9.0';
+export const CODENAME = 'Quick Draw';
+export const RELEASED = '2026-10-04';
 export const SAVE_FORMAT = 1;
 
 export const CHANGELOG = [
+  { v: '0.9.0', name: 'Quick Draw', date: '2026-10-04', notes: [
+    '✏️ Draw right on the card: pen (pressure on tablets), marker and eraser, with size and colour. Strokes go into a drawing layer, and every stroke is one undo.',
+    '✎ Tap any part of the card (name, cost, HP, brand, ability, rules, partners) and change it in the bar under the card. Double-click still types on the card.',
+    '🖼 Pictures in, cards out: “From picture” makes one character per picture, dropping a picture on a card swaps its art, and tapping an empty art window adds one.',
+    '🧹 Tidier everywhere: one library toolbar with Filters, a Share tab with four big actions (the rest folds away), deck extras in the ⋯ Deck menu, and a calmer editor bar.',
+    '“Edgelord” is retired (the game no longer uses it), holo foil is a plain per-card choice, and the editor states the new Backup rule: same brand or Partner, once per turn, not on a character that just came into play, +2 HP.',
+    'Your saves are untouched: nothing in the save format changed, and the Forge still backs up your set before any update.',
+  ] },
+  { v: '0.8.4', name: 'Studio', date: '2026-10-04', notes: [
+    'Open a playtest deck file: drop a .lftdeck.json from Send to playtest and its decks, stats, text, flavor and notes come back as cards. The art inside is a flattened card face, so it is not imported.',
+  ] },
   { v: '0.8.3', name: 'Studio', date: '2026-10-02', notes: [
     'Ability symbols on the card: a waving hand for HEY, I’M HERE!, Zz for NAP TIEM!, stink lines for BIG STINK!. They sit beside the banner, which can now carry a character’s own ability name. Turn them off per card with layout.icon = false.',
     'Drag a save file in from your desktop and, when it only brings new cards, it merges straight away with ↶ Undo. If it would overwrite cards you already have, you still get the Merge / Replace question.',

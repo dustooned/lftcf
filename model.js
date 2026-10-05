@@ -154,7 +154,6 @@ export function validate(c, project) {
     const lo = Math.floor(1.5 * c.cost + 1), hi = Math.ceil(1.6 * c.cost + 3);
     if (c.hp > hi) tip(`HP ${c.hp} is beefy for ${c.cost} SP (the base set runs ${lo}–${hi}).`);
     if (c.hp < lo) tip(`HP ${c.hp} is fragile for ${c.cost} SP (the base set runs ${lo}–${hi}).`);
-    if (c.edgelord && c.tier !== 'high') tip('Edgelord summons are high tier in the base set.');
   } else {
     if (!c.effect) err('Actions need an effect.');
   }

@@ -22,7 +22,7 @@
     <button data-view="library">&#128193; Cards</button>
     <button data-view="editor">&#9998; Editor</button>
     <button data-view="brands">&#127991; Brands</button>
-    <button data-view="share">&#128230; Save &amp; Share</button>
+    <button data-view="share">&#128230; Share</button>
     <button data-view="manual">&#128214; Manual</button>
   </nav>
   <div class="top-right">
@@ -45,26 +45,31 @@
       <div class="lib-main">
         <div class="panel-h"><span id="libTitle">&#128193; All cards</span><span id="libCount" class="muted-h"></span></div>
         <div id="libTools">
-        <button class="btn filter-toggle" id="filterToggle" aria-expanded="false" aria-controls="filters">&#128269; Search &amp; filter</button>
-        <div class="filters" id="filters">
+        <div class="libbar">
           <input id="q" type="search" placeholder="Search cards&hellip;" aria-label="Search cards">
           <div class="seg" id="fType" role="group" aria-label="Card type">
-            <button data-v="all" title="All cards">&#127183; All</button><button data-v="CHA" title="Characters">&#129354; CHA</button><button data-v="EXE" title="Edgelord summons (EXE characters)">&#128520; EXE</button><button data-v="ACT" title="Actions">&#9889; ACT</button>
+            <button data-v="all" title="All cards">All</button><button data-v="CHA" title="Characters">&#129354; CHA</button><button data-v="ACT" title="Actions">&#9889; ACT</button>
           </div>
-          <select id="fTier" aria-label="Tier"><option value="all">Any tier</option><option value="low">Low</option><option value="mid">Mid</option><option value="high">High</option></select>
-          <select id="fBrand" aria-label="Brand"></select>
-          <select id="fTag" aria-label="Allegiance"></select>
-          <select id="fTrig" aria-label="Ability type"><option value="all">Any ability</option><option value="entry">👋 HEY, I'M HERE!</option><option value="activated">💤 NAP TIEM!</option><option value="passive">💨 BIG STINK!</option><option value="none">▫️ No ability</option><option value="act-direct">▲ Action: direct</option><option value="act-control">⬢ Action: control</option></select>
-          <select id="fSort" aria-label="Sort"><option value="num">Sort: #</option><option value="cost">Sort: cost</option><option value="name">Sort: name</option><option value="brand">Sort: brand</option><option value="trigger">Sort: ability</option></select>
-        </div>
-        <div class="newrow" id="newRow">
-          <button class="btn primary" id="newCha">+ New Character</button>
-          <button class="btn primary alt" id="newAct">+ New Action</button>
-          <button class="btn" id="surprise">&#127922; Surprise me</button>
-          <span id="folderActs" class="btnrow"></span>
+          <button class="btn" id="moreFilters" aria-expanded="false" aria-controls="filters">&#9881; Filters<span id="fCount" class="fbadge" hidden></span></button>
           <span class="spacer"></span>
           <span class="zoom" title="Card size"><button class="icon-btn" id="zoomOut" title="Smaller cards" aria-label="Smaller cards">&#128269;&#8722;</button><input type="range" id="zoom" min="90" max="320" step="2" aria-label="Card size"><button class="icon-btn" id="zoomIn" title="Bigger cards" aria-label="Bigger cards">&#128269;+</button></span>
           <button class="btn" id="selectBtn" aria-pressed="false">&#9745; Select</button>
+        </div>
+        <div class="filters" id="filters" hidden>
+          <select id="fTier" aria-label="Tier"><option value="all">Any tier</option><option value="low">Low</option><option value="mid">Mid</option><option value="high">High</option></select>
+          <select id="fBrand" aria-label="Brand"></select>
+          <select id="fTag" aria-label="Allegiance"></select>
+          <select id="fTrig" aria-label="Ability type"><option value="all">Any ability</option><option value="entry">👋 HEY, I'M HERE!</option><option value="activated">💤 NAP TIEM!</option><option value="passive">💨 BIG STINK!</option><option value="none">No ability</option><option value="act-direct">▲ Direct action</option><option value="act-control">⬢ Control action</option></select>
+          <select id="fSort" aria-label="Sort"><option value="num">Sort: #</option><option value="cost">Sort: cost</option><option value="name">Sort: name</option><option value="brand">Sort: brand</option><option value="trigger">Sort: ability</option></select>
+          <button class="link small" id="clearFilters">Clear filters</button>
+        </div>
+        <div class="newrow" id="newRow">
+          <button class="btn primary" id="newCha">+ Character</button>
+          <button class="btn primary alt" id="newAct">+ Action</button>
+          <button class="btn" id="fromPic" title="Pick pictures: each one becomes a new character with that art. Dropping pictures on the page works too.">&#128444; From picture</button>
+          <button class="btn icon-only" id="surprise" title="Random card to riff on" aria-label="Random card">&#127922;</button>
+          <span class="spacer"></span>
+          <span id="folderActs" class="btnrow"></span>
         </div>
         </div>
         <div class="selbar" id="selbar" hidden></div>
@@ -85,9 +90,6 @@
           <button class="icon-btn" id="undoBtn" title="Undo (Ctrl+Z)" aria-label="Undo">&#8630;</button>
           <button class="icon-btn" id="redoBtn" title="Redo (Ctrl+Y)" aria-label="Redo">&#8631;</button>
           <span class="ed-layout" id="edLayout">
-            <button class="icon-btn" id="swapBtn" title="Swap sides" aria-label="Swap sides">&#8644;</button>
-            <button class="icon-btn" id="bgBtn" title="Change backdrop" aria-label="Change backdrop">&#9680;</button>
-            <button class="icon-btn" id="focusBtn" title="Focus: hide the side panel" aria-label="Focus mode" aria-pressed="false">&#9974;</button>
             <button class="icon-btn" id="zenBtn" title="Full canvas (F)" aria-label="Full canvas" aria-pressed="false">&#x26F6;</button>
           </span>
           <span class="ed-out">
@@ -99,6 +101,7 @@
           <div class="stage" id="stage">
             <div class="rail glass" id="toolRail" role="toolbar" aria-label="Tools" aria-orientation="vertical"></div>
             <svg id="cardSvg" viewBox="-70 -70 640 840" role="img" aria-label="Card preview"></svg>
+            <canvas id="drawOverlay" class="draw-overlay" aria-hidden="true"></canvas>
             <div class="drop-hint">Drop an image to add it</div>
             <button class="glass pill-btn layers-btn" id="layersBtn" aria-pressed="false" aria-controls="layersPop" title="Layers (L)"></button>
             <div class="layers-pop glass" id="layersPop" role="dialog" aria-label="Layers" hidden></div>
@@ -112,7 +115,7 @@
     <div class="panel inspector">
       <div class="splitter" id="splitter" title="Drag to resize" aria-hidden="true"></div>
       <div class="sectabs" id="sectabs" role="tablist">
-        <button data-sec="stats">Stats</button><button data-sec="brand">Brand</button><button data-sec="ability">Ability</button><button data-sec="design">Design</button>
+        <button data-sec="stats">Stats</button><button data-sec="brand">Brand</button><button data-sec="ability">Mechanics</button><button data-sec="design">Design</button>
       </div>
       <div id="inspector" class="inspector-body"></div>
       <div id="checks" class="checks"></div>
@@ -141,21 +144,22 @@
 
   <!-- SHARE -->
   <section id="view-share" class="view share">
-    <div class="panel" id="pSave">
-      <div class="panel-h">&#128190; Your save</div>
+    <div class="panel share-main" id="pSave">
+      <div class="panel-h">&#128230; Share &amp; save</div>
       <div class="pad">
-        <p><b>Autosave is on.</b> Everything lives in this browser on this device (<span id="storageInfo">&hellip;</span>). To move to another device or hand your work to a collaborator, download a save file.</p>
-        <div class="btnrow">
-          <button class="btn primary" id="dlSave">&#11015; Download save file</button>
-          <button class="btn" id="openFile">&#128194; Open file&hellip;</button>
+        <div class="big-actions">
+          <button class="big-act primary" id="dlPlay"><span class="ba-ic">&#128377;</span><b>Send to playtest</b><small>Every deck with its card art, for the playtest table or SAGA</small></button>
+          <button class="big-act" id="printAll"><span class="ba-ic">&#128424;</span><b>Print</b><small>9 real-size cards per page, with cut lines</small></button>
+          <button class="big-act" id="dlSave"><span class="ba-ic">&#128190;</span><b>Download save file</b><small>Back up your set or move it to another device</small></button>
+          <button class="big-act" id="openFile"><span class="ba-ic">&#128194;</span><b>Open a file</b><small>Saves, deck files, card PNGs or spreadsheets. Dropping files on the page works too.</small></button>
         </div>
-        <p class="muted small">Opens save files (<code>.lftset.json</code>), export ZIPs, shared card PNGs, Excel (<code>.xlsx</code>), <code>.csv</code> or <code>cards.json</code>. You can also just drag files onto the page.</p>
+        <p class="muted small save-note"><b>Autosave is on.</b> Your cards live in this browser on this device (<span id="storageInfo">&hellip;</span>). Download a save file to keep a copy anywhere else.</p>
       </div>
     </div>
-    <div class="panel" id="pSheet">
-      <div class="panel-h">&#128202; Spreadsheet</div>
+    <details class="panel more" id="pSheet">
+      <summary class="panel-h">&#128202; Spreadsheet &amp; Google Sheet</summary>
       <div class="pad">
-        <p><b>Prefer typing cards in a spreadsheet?</b> Grab the template, fill in rows, and drop the file back here. Stats and text update, and your art and styling stay.</p>
+        <p>Prefer typing cards in a spreadsheet? Fill in rows and drop the file back here. Stats and text update; art and styling stay.</p>
         <div class="btnrow">
           <button class="btn" id="dlTemplate">&#11015; Blank template (.xlsx)</button>
           <button class="btn" id="dlXlsx">&#11015; My cards (.xlsx)</button>
@@ -170,53 +174,48 @@
           <p class="muted small">The sheet wins for stats &amp; text. Art, style and decks always stay from the Forge. The link travels inside save files, so collaborators get it too.</p>
         </div>
       </div>
-    </div>
-    <div class="panel" id="pZip">
-      <div class="panel-h">&#128230; Export pack (ZIP)</div>
+    </details>
+    <details class="panel more" id="pZip">
+      <summary class="panel-h">&#128230; Export everything (ZIP)</summary>
       <div class="pad">
         <div class="checks-list">
           <label><input type="checkbox" id="xPng" checked> Card images (PNG)</label>
           <label><input type="checkbox" id="xHi"> &hellip;at 2&times; size (print-ish)</label>
-          <label><input type="checkbox" id="xTts" checked> Tabletop Simulator deck sheet + back</label>
-          <label><input type="checkbox" id="xData" checked> Game data: <code>cards.json</code>, <code>.csv</code>, <code>.xlsx</code></label>
-          <label><input type="checkbox" id="xSave" checked> Save file (re-open everything later)</label>
           <label><input type="checkbox" id="xPlay" checked> Playtest table file (every deck, with card art)</label>
+          <label><input type="checkbox" id="xSave" checked> Save file (re-open everything later)</label>
+          <label><input type="checkbox" id="xData" checked> Game data: <code>cards.json</code>, <code>.csv</code>, <code>.xlsx</code></label>
+          <label><input type="checkbox" id="xTts"> Tabletop Simulator deck sheet + back <span class="muted">(legacy)</span></label>
         </div>
-        <div class="btnrow">
-          <button class="btn primary" id="dlZip">&#11015; Download ZIP</button>
-          <button class="btn" id="copyJson">&#128203; Copy cards.json</button>
-          <button class="btn" id="dlPlay">&#128377; Playtest file (all decks)</button>
-          <button class="btn" id="printAll">&#128424; Print all cards</button>
-        </div>
-        <p class="muted small">Want just one deck? Open it in the Cards tab and use <b>Export deck</b>.</p>
+        <div class="btnrow"><button class="btn primary" id="dlZip">&#11015; Download ZIP</button></div>
+        <p class="muted small">Just one deck? Open it in Cards and use its <b>&#8943;</b> menu.</p>
       </div>
-    </div>
-    <div class="panel" id="pVersions">
-      <div class="panel-h">&#128248; Snapshots &amp; backups</div>
+    </details>
+    <details class="panel more" id="pVersions">
+      <summary class="panel-h">&#128248; Snapshots &amp; backups</summary>
       <div class="pad">
-        <p>Take a snapshot of your whole set, or of one deck (open it in Cards &rarr; <b>📸 Snapshot</b>), before big changes. Roll back to any snapshot later, or download them all as one archive.</p>
+        <p>Take a snapshot before big changes and roll back any time. The Forge also keeps a few automatic backups, plus one before every update.</p>
         <div class="btnrow">
           <button class="btn primary" id="saveSetVersion">&#128248; Snapshot the whole set</button>
           <button class="btn" id="archiveVersions">&#11015; Download all snapshots (ZIP)</button>
         </div>
         <div id="versionList" class="vlist"></div>
       </div>
-    </div>
-    <div class="panel" id="pInstall">
-      <div class="panel-h">&#128241; Install</div>
+    </details>
+    <details class="panel more" id="pInstall">
+      <summary class="panel-h">&#128241; Install as an app</summary>
       <div class="pad">
         <p>Add Card Forge to your home screen or desktop so it opens like an app and works offline.</p>
         <button class="btn" id="installBtn" hidden>&#11015; Install app</button>
         <p class="muted small">On iPhone/iPad: Share &rarr; <i>Add to Home Screen</i>. On Chrome/Edge: the install icon in the address bar.</p>
       </div>
-    </div>
-    <div class="panel danger">
-      <div class="panel-h">&#9888; Start fresh / examples</div>
+    </details>
+    <details class="panel more danger" id="pFresh">
+      <summary class="panel-h">&#9888; Start fresh / examples</summary>
       <div class="pad btnrow">
         <button class="btn" id="loadBase">Load the 24 base-game cards as examples</button>
         <button class="btn danger-btn" id="emptySet">Wipe everything &amp; start blank</button>
       </div>
-    </div>
+    </details>
   </section>
   <!-- MANUAL -->
   <section id="view-manual" class="view manual">
@@ -244,6 +243,7 @@
 <dialog id="modal"><form method="dialog" id="modalForm"></form></dialog>
 <input type="file" id="filePick" hidden multiple accept=".json,.zip,.png,.jpg,.jpeg,.gif,.webp,.csv,.xlsx,.xls,.ods,image/*">
 <input type="file" id="imgPick" hidden accept="image/*">
+<input type="file" id="cardPicPick" hidden multiple accept="image/*">
 <input type="file" id="logoPick" hidden accept="image/png,image/svg+xml,.png,.svg">
 <script type="module" src="app.js"></script>
 </body>
