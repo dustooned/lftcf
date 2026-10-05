@@ -2,12 +2,16 @@
 // can say which build they're on and anyone can find it again (the lftcf repo tags each one).
 // Bump SAVE_FORMAT only when the saved data shape changes in a way older Forges can't read,
 // and add a migration in upgrade().
-export const VERSION = '0.9.5';
+export const VERSION = '0.9.6';
 export const CODENAME = 'Quick Draw';
 export const RELEASED = '2026-10-04';
 export const SAVE_FORMAT = 1;
 
 export const CHANGELOG = [
+  { v: '0.9.6', name: 'Quick Draw', date: '2026-10-04', notes: [
+    '📖 Brand lore: every brand gets a lore box (Brands tab or the card back designer), and the new “Brand lore” card back sets up the forces of your deck: a deck story plus up to four brands with their lore. Every card shares the same back, so it gives nothing away in play.',
+    '↺ Print in real life has a Start over button that puts every print option back to the standard setup without closing the window.',
+  ] },
   { v: '0.9.5', name: 'Quick Draw', date: '2026-10-04', notes: [
     '🖨 Print in real life: choose the paper (Letter, A4, Legal, Tabloid, A3, Super B), the card size (Poker, Bridge, Mini Euro, Tarot, Jumbo or custom), bleed, space between cards, crop marks and cut outlines, and backs (long- or short-edge double-sided, or separate pages). It fits as many cards per sheet as it can and remembers your choices.',
     '💥 Direct and 🎛️ Control actions get their own emoji: on the card (“ACT · 💥 DIRECT”), in filters and pills, and on the family buttons with a short blurb each.',

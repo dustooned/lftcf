@@ -204,6 +204,8 @@ textarea.inline-edit { font-weight: 500; }
 .irl-row[hidden] { display: none; }
 .irl-checks { border: 1px dashed var(--line); border-radius: 6px; padding: 8px 10px; display: grid; gap: 6px; font-size: 13px; }
 .irl-checks legend { font-weight: bold; font-size: 12px; padding: 0 4px; }
+.irl-sumrow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.irl-sumrow .irl-sum { flex: 1 1 240px; }
 .irl-sum { margin: 0; padding: 8px 10px; border-radius: 6px; background: var(--panel2); font-size: 13px; }
 .tier-help { list-style: none; margin: 6px 0 0; padding: 0; font-size: 11.5px; color: var(--muted); display: grid; gap: 2px; }
 .tier-help li.on { color: var(--text); }
@@ -460,6 +462,10 @@ body.card-dragging .folder[data-folder]:not([data-folder="all"]):not(.on), body.
 .bv-prev svg { display: block; border-radius: 14px; box-shadow: 0 10px 26px rgba(0,0,0,.35); max-width: 100%; height: auto; }
 .bv-ctl { flex: 1 1 320px; max-width: 560px; }
 .bv-auto { margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; background: var(--panel2); border: 1px dashed var(--line); font-size: 12.5px; }
+.bv-lore textarea, .bv-force textarea { width: 100%; }
+.bv-force { display: grid; gap: 4px; margin-top: 6px; font-size: 12.5px; text-transform: none; font-weight: normal; letter-spacing: 0; color: inherit; }
+.bv-force .ico, .bv-force svg { vertical-align: -3px; }
+.brand-lore { flex: 1 1 100%; min-height: 44px; font-size: 12.5px; }
 .bk-cols { display: flex; flex-wrap: wrap; gap: 8px 16px; }
 .bk-col { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; text-transform: none; font-weight: normal; letter-spacing: 0; color: inherit; }
 .backedit { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start; } .backprev svg { display: block; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,.3); }

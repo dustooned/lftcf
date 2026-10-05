@@ -309,9 +309,34 @@ export function lftMark(cx, cy, size, { bg = '#171724', frame = '#aff57e', ink =
   return `<g transform="translate(${cx} ${cy}) scale(${(size / 100).toFixed(4)}) rotate(-6)"><rect x="-46" y="-46" width="92" height="92" rx="14" fill="${esc(bg)}" stroke="${esc(frame)}" stroke-width="6"/>
     <text text-anchor="middle" font-family="'Arial Black', Arial, sans-serif" font-weight="900" fill="${esc(ink)}"><tspan x="0" y="-13" font-size="21">LOL,</tspan><tspan x="0" y="10" font-size="21">FIGHT</tspan><tspan x="0" y="35" font-size="23" fill="${esc(accent)}">TIEM!</tspan></text></g>`;
 }
-export const BACK_LAYOUTS = { wordmark: 'Big title', badge: 'LFT badge', logo: 'Your logo' };
+export const BACK_LAYOUTS = { wordmark: 'Big title', badge: 'LFT badge', logo: 'Your logo', lore: 'Brand lore' };
 export const BACK_PATTERNS = { stripes: 'Stripes', dots: 'Dots', none: 'Plain' };
-export function backSVG(setName = 'LOL, FIGHT TIEM!', scale = 1, back = {}, logo = '') {
+// "The forces" back: a small badge, the deck's story, then each brand with its lore, shrinking to fit.
+function loreBack(back, forces, { ink, frame, bg }) {
+  const story = String(back.story || '').trim(), list = (forces || []).filter(f => f.name).slice(0, 4);
+  let out = '';
+  for (let size = 17; size >= 10; size--) {
+    const count = Math.floor(52 * 15 / size), step = size * 1.25;
+    const st = story ? wrap(story, count) : [];
+    const blocks = list.map(f => ({ f, lines: wrap(f.lore || 'Lore coming soon.', count) }));
+    const h = st.length * step + (st.length ? 10 : 0) + blocks.reduce((a, b) => a + (size + 6) + b.lines.length * step + 10, 0);
+    if (h > 330 && size > 10) continue;
+    let y = 252;
+    const T = (s, x, yy, sz, color, weight, extra = '') => `<text x="${x}" y="${yy}" font-family="Arial, sans-serif" font-weight="${weight}" font-size="${sz}" fill="${esc(color)}"${extra}>${esc(s)}</text>`;
+    out = st.map(l => { const t = T(l, 250, y, size, ink, 500, ' text-anchor="middle" font-style="italic"'); y += step; return t; }).join('');
+    if (st.length) y += 10;
+    for (const b of blocks) {
+      y += size + 4;
+      out += `${shapeMarkup(b.f.shape || 'circle', 66, y - size * 0.35, size * 0.55, b.f.color || frame, 1)}${T(b.f.name.toUpperCase(), 82, y, size + 2, frame, 900)}`;
+      y += 4;
+      for (const l of b.lines) { y += step; out += T(l, 60, y - step * 0.25, size, ink, 500); }
+      y += 10;
+    }
+    break;
+  }
+  return `${lftMark(250, 120, 120, { bg, frame, ink, accent: frame })}<text x="250" y="222" text-anchor="middle" font-family="'Arial Black', Arial, sans-serif" font-weight="900" font-size="30" fill="${esc(ink)}" letter-spacing="2">THE FORCES</text>${out}`;
+}
+export function backSVG(setName = 'LOL, FIGHT TIEM!', scale = 1, back = {}, logo = '', forces = []) {
   const bg = back.bg || '#171724', frame = back.frame || '#aff57e', stripe = back.stripe || '#ff9ba7', ink = back.ink || '#fff9eb';
   const t = (s, x, y, size, color, weight) => `<text x="${x}" y="${y}" text-anchor="middle" font-family="Arial, sans-serif" font-weight="${weight}" font-size="${size}" fill="${esc(color)}">${esc(s)}</text>`;
   const layout = BACK_LAYOUTS[back.layout] ? back.layout : 'wordmark', pat = BACK_PATTERNS[back.pattern] ? back.pattern : 'stripes', wm = Math.min(0.6, Math.max(0, +back.watermark || 0));
@@ -321,7 +346,8 @@ export function backSVG(setName = 'LOL, FIGHT TIEM!', scale = 1, back = {}, logo
   const fill = pat === 'none' ? '' : `<rect x="22" y="22" width="456" height="656" fill="url(#backpat)" fill-opacity="${pat === 'dots' ? 0.2 : 0.12}"/>`;
   const water = wm ? `<g opacity="${wm}">${lftMark(250, 350, 470, { bg: 'none', frame: ink, ink, accent: ink })}</g>` : '';
   let center;
-  if (layout === 'badge' || (layout === 'logo' && !logo)) center = lftMark(250, 330, 300, { bg, frame, ink, accent: frame });
+  if (layout === 'lore') center = loreBack(back, forces, { ink, frame, bg });
+  else if (layout === 'badge' || (layout === 'logo' && !logo)) center = lftMark(250, 330, 300, { bg, frame, ink, accent: frame });
   else if (layout === 'logo') center = `<image href="${esc(logo)}" x="95" y="160" width="310" height="310" preserveAspectRatio="xMidYMid meet"/>`;
   else {
     const dy = logo ? 20 : 0, mark = logo ? `<circle cx="250" cy="150" r="78" fill="${esc(bg)}" stroke="${esc(frame)}" stroke-width="6"/><image href="${esc(logo)}" x="186" y="86" width="128" height="128" preserveAspectRatio="xMidYMid meet"/>` : '';

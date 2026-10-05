@@ -52,7 +52,7 @@ export function upgrade(o) {
   const p = { format: 'lft-forge', setName: 'My Card Set', setCode: 'CUSTOM', credits: '', brands: [], tags: [], folders: [], cards: [], trash: [], assets: {}, sheet: { url: '', auto: false }, ...o };
   p.version = SAVE_FORMAT; p.forgeVersion = VERSION;
   for (const k of ['setName', 'setCode', 'credits']) p[k] = String(p[k] ?? '');
-  p.brands = (p.brands || []).filter(b => b && b.name).map(b => ({ name: String(b.name), shape: SHAPES[b.shape] ? b.shape : 'circle', color: hex(b.color, ''), ...(SAFE_ID.test(b.logo) ? { logo: b.logo } : {}) }));
+  p.brands = (p.brands || []).filter(b => b && b.name).map(b => ({ name: String(b.name), shape: SHAPES[b.shape] ? b.shape : 'circle', color: hex(b.color, ''), ...(SAFE_ID.test(b.logo) ? { logo: b.logo } : {}), ...(b.lore ? { lore: String(b.lore).slice(0, 240) } : {}) }));
   if (!p.brands.some(b => b.name === 'Unassigned')) p.brands.unshift({ name: 'Unassigned', shape: 'circle', color: '' });
   p.tags = [...new Set((p.tags || []).map(String))];
   p.folders = (p.folders || []).filter(f => f && SAFE_ID.test(f.id)).map(f => ({ id: f.id, name: String(f.name || 'Deck').slice(0, 40), icon: FOLDER_ICONS.includes(f.icon) ? f.icon : '📁', ...(f.sandbox ? { sandbox: true } : {}) }));
@@ -60,7 +60,7 @@ export function upgrade(o) {
   p.sheet = { url: String(p.sheet?.url || ''), auto: !!p.sheet?.auto, last: String(p.sheet?.last || '') };
   const b = p.back || {};
   p.back = { bg: hex(b.bg, DEFAULT_BACK.bg), frame: hex(b.frame, DEFAULT_BACK.frame), stripe: hex(b.stripe, DEFAULT_BACK.stripe), ink: hex(b.ink, DEFAULT_BACK.ink), tagline: String(b.tagline == null || b.tagline === 'Hmm, Hmm! Games' ? DEFAULT_BACK.tagline : b.tagline).slice(0, 40),
-    layout: ['wordmark', 'badge', 'logo'].includes(b.layout) ? b.layout : 'wordmark', pattern: ['stripes', 'dots', 'none'].includes(b.pattern) ? b.pattern : 'stripes',
+    layout: ['wordmark', 'badge', 'logo', 'lore'].includes(b.layout) ? b.layout : 'wordmark', story: String(b.story ?? '').slice(0, 260), pattern: ['stripes', 'dots', 'none'].includes(b.pattern) ? b.pattern : 'stripes',
     watermark: clamp(num(b.watermark, 0), 0, 0.6), showSet: b.showSet !== false, ...(SAFE_ID.test(b.logo) ? { logo: b.logo } : {}) };
   const folderIds = new Set(p.folders.map(f => f.id));
   const gd = p.gameDecks || {};

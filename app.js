@@ -244,6 +244,10 @@ function renderBackView() {
       <div class="field"><span class="lbl">🖼 Center</span>${seg('layout', BACK_LAYOUTS)}
         <div class="btnrow" style="margin-top:6px"><button type="button" class="btn small" data-bkact="logo">🏷 ${bk.logo ? 'Change' : 'Upload'} your logo</button>${bk.logo ? '<button type="button" class="btn small" data-bkact="logoDel">✕ Remove logo</button>' : ''}</div>
         <div class="help">The LOL, FIGHT TIEM! badge is always available: pick <b>LFT badge</b>, or use it as a faint watermark below.</div></div>
+      ${bk.layout === 'lore' ? `<div class="field bv-lore"><label for="bkStory">📖 Deck story <span class="muted">(sets up the fight)</span></label><textarea id="bkStory" data-bk="story" rows="3" maxlength="260" placeholder="e.g. Two worlds collide when a cursed game cartridge drags the Stay Tooned crew into Psycho Arts' arcade…">${esc(bk.story || '')}</textarea>
+        <span class="lbl" style="margin-top:8px">⚔️ The forces <span class="muted">(each brand's lore, also in the Brands tab)</span></span>
+        ${backForces().slice(0, 4).map(b => `<label class="bv-force">${shapeIcon(b.shape, b.color || 'currentColor', 18)} <b>${esc(b.name)}</b><textarea data-blore-name="${esc(b.name)}" rows="2" maxlength="240" placeholder="Who are they? What do they want?">${esc(b.lore || '')}</textarea></label>`).join('') || '<p class="help">Give some characters a brand first.</p>'}
+        <div class="help">The back shows up to 4 brands, most cards first. Lore shrinks to fit.</div></div>` : ''}
       <div class="field"><span class="lbl">▦ Pattern</span>${seg('pattern', BACK_PATTERNS)}</div>
       <div class="field"><label class="slider inline">💧 LFT watermark <input type="range" data-bk="watermark" min="0" max="0.6" step="0.05" value="${bk.watermark || 0}"></label></div>
       <div class="field"><span class="lbl">🌈 Colours</span><div class="bk-cols">${col('bg', 'Background')}${col('frame', 'Frame')}${col('stripe', 'Pattern')}${col('ink', 'Text')}</div></div>
@@ -254,6 +258,8 @@ function renderBackView() {
 }
 const refreshBack = () => { const el = $('#backPrevBig'); if (el) el.innerHTML = backMarkup(0.62, true); };
 $('#grid').addEventListener('input', e => {
+  const bl = e.target.dataset.bloreName;
+  if (bl != null && ui.folder === 'back') { const b = P.brands.find(x => x.name === bl); if (b) { b.lore = e.target.value; save(); refreshBack(); } return; }
   const k = e.target.dataset.bk; if (!k || ui.folder !== 'back') return;
   P.back[k] = e.target.type === 'checkbox' ? e.target.checked : e.target.type === 'range' ? +e.target.value : e.target.value;
   save(); refreshBack();
@@ -1802,6 +1808,7 @@ function renderBrands() {
       <input type="color" data-bcolor="${i}" value="${b.color || '#171724'}" title="Brand color (tints placeholder art)">
       ${b.color ? `<button class="btn small" data-bclear="${i}" title="Remove color">⌀</button>` : ''}
       <span class="count">${n} card${n === 1 ? '' : 's'}</span>
+      ${b.name === 'Unassigned' ? '' : `<textarea class="brand-lore" data-blore="${i}" rows="2" maxlength="240" placeholder="📖 Brand lore: who are they, what do they want? (shows on a Brand lore card back)" aria-label="${esc(b.name)} lore">${esc(b.lore || '')}</textarea>`}
       ${b.name === 'Unassigned' ? '' : `<button class="btn small danger-btn" data-bdel="${i}" title="Delete brand">🗑</button>`}</div>`;
   }).join('');
   $('#tagList').innerHTML = P.tags.length ? P.tags.map((t, i) => {
@@ -1831,6 +1838,7 @@ $('#view-brands').addEventListener('change', e => {
 $('#view-brands').addEventListener('input', e => {
   const k = e.target.dataset.back;
   if (k) { P.back[k] = e.target.value; save(); $('#backPrev').innerHTML = backMarkup(0.34, true); return; }
+  if (e.target.dataset.blore != null) { P.brands[+e.target.dataset.blore].lore = e.target.value; save(); return; }
   const i = e.target.dataset.bcolor; if (i == null) return;
   P.brands[+i].color = e.target.value; save();
   e.target.closest('.brow').querySelector('.ico').innerHTML = shapeIcon(P.brands[+i].shape, e.target.value, 28);
@@ -1877,7 +1885,9 @@ async function toPNG(svgStr, w, h) {
   done(); return new Promise(r => cv.toBlob(r, 'image/png'));
 }
 const fileBase = c => String(c.fileName || '').replace(/[^\w\- .]/g, '').trim() || c.id;
-const backMarkup = (scale = 1, display = false) => backSVG(P.setName, scale, P.back, P.back.logo ? (display ? href(P.back.logo) : P.assets[P.back.logo] || '') : '');
+// The forces on a lore back: brands that have cards (or lore), most cards first.
+const backForces = () => P.brands.filter(b => b.name !== 'Unassigned' && (b.lore || P.cards.some(c => c.origin === b.name))).sort((a, b) => P.cards.filter(c => c.origin === b.name).length - P.cards.filter(c => c.origin === a.name).length);
+const backMarkup = (scale = 1, display = false) => backSVG(P.setName, scale, P.back, P.back.logo ? (display ? href(P.back.logo) : P.assets[P.back.logo] || '') : '', backForces());
 const blobToDataURL = b => new Promise(r => { const f = new FileReader(); f.onload = () => r(f.result); f.readAsDataURL(b); });
 async function toImage(svgStr, w, h, type = 'image/png', q = 0.9) {
   const { img, done } = await svgImage(svgStr), cv = document.createElement('canvas'); cv.width = w; cv.height = h;
@@ -1918,7 +1928,7 @@ function printForm(o) {
     <fieldset class="irl-checks"><legend>✂️ Cutting guides</legend>
       <label><input type="checkbox" name="crop" ${o.marks === 'crop' ? 'checked' : ''}> Crop marks in the margins (line up a ruler or guillotine)</label>
       <label><input type="checkbox" name="outline" ${o.outline ? 'checked' : ''}> Thin cut outline around each card (scissors)</label></fieldset>
-    <p class="irl-sum" id="irlSum"></p>
+    <div class="irl-sumrow"><p class="irl-sum" id="irlSum"></p><button type="button" class="btn small" data-print-reset title="Put every print option back to the standard setup">↺ Start over</button></div>
     <p class="muted small">Print at <b>100% / Actual size</b> with scaling off. Poker size matches the card art exactly; other sizes keep the art whole and fill the rest with the card's border colour.</p></div>`;
 }
 function printDialogBody(o) {
@@ -1957,11 +1967,16 @@ async function printSheet(cards, label) {
     $('#irlPrev').innerHTML = printPreview(cards, o);
     $('#irlSum').innerHTML = L.perPage ? `<b>${L.perPage} cards per sheet</b> (${L.cols} × ${L.rows}, ${L.landscape ? 'landscape' : 'portrait'}) · ${cards.length} card${cards.length === 1 ? '' : 's'} = <b>${pages} sheet${pages === 1 ? '' : 's'}</b>${o.backs === 'none' ? '' : ` + ${pages} backs`}` : '⚠ That card size doesn’t fit this paper. Pick bigger paper or a smaller card.';
   };
-  const done = ask({ title: `🖨 Print in real life · ${esc(label)}`, body: printDialogBody(printOpts), wide: true, buttons: [{ label: 'Cancel', value: '' }, { label: '↺ Defaults', value: 'reset' }, { label: '🖨 Make print sheet', value: 'go', primary: true }] });
+  const done = ask({ title: `🖨 Print in real life · ${esc(label)}`, body: printDialogBody(printOpts), wide: true, buttons: [{ label: 'Cancel', value: '' }, { label: '🖨 Make print sheet', value: 'go', primary: true }] });
   const live = new AbortController(); // listeners live only while this dialog is open
-  $('#modalForm').addEventListener('input', summary, { signal: live.signal }); $('#modalForm').addEventListener('change', summary, { signal: live.signal }); summary();
+  $('#modalForm').addEventListener('input', summary, { signal: live.signal }); $('#modalForm').addEventListener('change', summary, { signal: live.signal });
+  $('#modalForm').addEventListener('click', e => {
+    if (!e.target.closest('[data-print-reset]')) return;
+    printOpts = { ...PRINT_DEFAULTS }; lsSet('forge-print', JSON.stringify(printOpts));
+    $('#modalForm .irl-wrap').outerHTML = printDialogBody(printOpts); summary(); toast('↺ Print settings are back to the standard setup');
+  }, { signal: live.signal });
+  summary();
   const v = await done; live.abort();
-  if (v === 'reset') { printOpts = { ...PRINT_DEFAULTS }; lsSet('forge-print', JSON.stringify(printOpts)); return printSheet(cards, label); }
   if (v !== 'go') return;
   printOpts = readPrintForm(); lsSet('forge-print', JSON.stringify(printOpts));
   const L = printLayout(printOpts); if (!L.perPage) return toast('That card size doesn’t fit this paper.', true);
@@ -2415,7 +2430,7 @@ function renderManual() {
       <li><b>Layers</b> panel: drag the dots to restack, hide 👁, lock 🔒, double-click to rename, and set opacity and blend mode (Multiply, Screen, Overlay…).</li>
       <li>The <b>dock</b> under the card changes with your selection. <b>Transform</b>: align buttons, Fill / Fit / Center, size, spin, opacity. <b>Style</b>: colour swatches, fonts, outlines, shape picker, masks and <b>✨ Remove background</b> (best on plain backgrounds; Strength tunes it, Original undoes it). <b>Adjust</b>: brightness, contrast, saturation, hue. <b>Effects</b>: drop shadow, glow, sticker outline.</li>
       <li><b>Design</b> tab: style presets, colors, gradients, fonts and holo foil. The rules check warns when text gets hard to read.</li>
-      <li><b>🎴 Card back</b> (in the Decks list): presets, a big title, the built-in LOL, FIGHT TIEM! badge or your own logo, a pattern, an LFT watermark, colours and tagline. Playtest/SAGA files, the TTS sheet and print sheets pick it up automatically.</li>
+      <li><b>🎴 Card back</b> (in the Decks list): presets, a big title, the built-in LOL, FIGHT TIEM! badge, your own logo, or <b>Brand lore</b> (a deck story plus each brand's lore, “The forces”), a pattern, an LFT watermark, colours and tagline. Playtest/SAGA files, the TTS sheet and print sheets pick it up automatically.</li>
       <li><b>LOL, FIGHT TIEM! logo</b>: the <b>Logo</b> tool offers the built-in badge on any card, e.g. as a watermark.</li>
       <li><b>Brands</b> tab → Set Info: the set name printed on every card.</li>
       <li>On PC, drag the side panel's edge to resize it.</li></ul>`],
