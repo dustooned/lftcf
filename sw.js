@@ -1,7 +1,7 @@
 // Network-first offline cache. Same-origin files are revalidated on every load ("no-cache" =
 // ask the server, usually a cheap 304), so a release can never mix old and new files; when
 // offline, the last good copy is served.
-const CACHE = 'card-forge-0.9.0'; // keep in step with version.js
+const CACHE = 'card-forge-0.9.1'; // keep in step with version.js
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
 self.addEventListener('fetch', e => {

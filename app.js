@@ -34,7 +34,7 @@ const ui = { lastPick: null, view: 'library', cur: null, sel: null, field: null,
 const TRIGGERS = {
   none:          { icon: '▫️', short: 'NONE',  label: 'No ability' },
   entry:         { icon: '👋', short: 'HEY!',  label: "HEY, I'M HERE! (on entry)" },
-  activated:     { icon: '💤', short: 'NAP',   label: 'NAP TIEM! (activated)' },
+  activated:     { icon: '❄️', short: 'NAP',   label: 'NAP TIEM! (activated)' },
   passive:       { icon: '💨', short: 'STINK', label: 'BIG STINK! (passive)' },
   'act-direct':  { icon: '▲',  short: 'DIRECT', label: 'Action: direct' },
   'act-control': { icon: '⬢',  short: 'CONTROL', label: 'Action: control' },
@@ -1605,7 +1605,11 @@ function apply(path, value, rerender) {
   else setPath(c, path, value);
   if (path === 'name' && c.autoId) c.id = uniqueCardId(c.name, P.cards, c);
   if (path === 'textMode' && value === 'custom' && !c.text) c.text = autoText(c);
+  // Picking HEY / NAP / STINK writes the matching rules text ("When this enters your ring, …").
+  const rewrote = path === 'timing' && c.textMode === 'custom';
+  if (path === 'timing') { c.textMode = 'auto'; if (value === 'none') delete c.passive; }
   normalize(c);
+  if (rewrote) toast(`Rules text rewritten for ${TRIGGERS[c.timing]?.label || 'the new trigger'} (Ctrl+Z brings your wording back)`);
   renderStage(); renderChecks(); updateTitle(); save();
   if (rerender || STRUCTURAL.has(path)) renderInspector();
   else if (c.textMode === 'auto') { const t = $('#inspector textarea[data-f="text"]'); if (t) t.value = c.text; }

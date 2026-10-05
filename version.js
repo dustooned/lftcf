@@ -2,12 +2,16 @@
 // can say which build they're on and anyone can find it again (the lftcf repo tags each one).
 // Bump SAVE_FORMAT only when the saved data shape changes in a way older Forges can't read,
 // and add a migration in upgrade().
-export const VERSION = '0.9.0';
+export const VERSION = '0.9.1';
 export const CODENAME = 'Quick Draw';
 export const RELEASED = '2026-10-04';
 export const SAVE_FORMAT = 1;
 
 export const CHANGELOG = [
+  { v: '0.9.1', name: 'Quick Draw', date: '2026-10-04', notes: [
+    '❄️ NAP TIEM! abilities now show a snowflake (on the card and in filters), since using one freezes the character. HEY keeps the waving hand; BIG STINK keeps its stink lines for now.',
+    'Picking an ability type (HEY / NAP / STINK) writes its rules text for you, e.g. “When this enters your ring, …”, then you tune the effect.',
+  ] },
   { v: '0.9.0', name: 'Quick Draw', date: '2026-10-04', notes: [
     '✏️ Draw right on the card: pen (pressure on tablets), marker and eraser, with size and colour. Strokes go into a drawing layer, and every stroke is one undo.',
     '✎ Tap any part of the card (name, cost, HP, brand, ability, rules, partners) and change it in the bar under the card. Double-click still types on the card.',

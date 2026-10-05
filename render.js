@@ -5,11 +5,12 @@ export const ART = { x: 25, y: 207, w: 450, h: 188 };
 export const TIER_COLORS = { low: '#ff9ba7', mid: '#89e4d7', high: '#ceacff' };
 export const ACT_COLOR = '#ffda52';
 export const TIMING_LABEL = { none: 'NO ABILITY', entry: "HEY, I'M HERE!", activated: 'NAP TIEM!', passive: 'BIG STINK!' };
-// Ability symbols printed beside the banner: waving hand = HEY, I'M HERE!, Zz = NAP TIEM!,
+// Ability symbols printed beside the banner: waving hand = HEY, I'M HERE!, snowflake = NAP TIEM!
+// (activating freezes the character, so it matches the freeze wording, per the co-dev's notes),
 // stink lines = BIG STINK!. Drawn as strokes (not emoji) so PNG exports never lose them.
 export const ABILITY_ICONS = {
   entry: '<path d="M9 14V7.5a1.5 1.5 0 013 0V12M12 12V6a1.5 1.5 0 013 0v6M15 12V8a1.5 1.5 0 013 0v7c0 4-2.5 7-6 7-2.4 0-3.9-1-5.3-2.8L4 16a1.5 1.5 0 012.3-1.9L9 16.5"/><path d="M3 7.5c-.9-1.3-.9-2.7 0-4M6 6c-.6-.9-.6-1.8 0-2.6"/>',
-  activated: '<path d="M4 5h8L4 14h8"/><path d="M15 12h5l-5 7h5"/>',
+  activated: '<path d="M12 2.5v19M3.8 7.25l16.4 9.5M3.8 16.75l16.4-9.5"/><path d="M9.4 4.4L12 7l2.6-2.6M9.4 19.6L12 17l2.6 2.6M4.1 11l2.7 1-1.6 2.4M19.9 13l-2.7-1 1.6-2.4M4.9 9.6l2-.7.3-2.9M19.1 14.4l-2 .7-.3 2.9"/>',
   passive: '<path d="M6 21c-2.5-3 2.5-5 0-8s2.5-5 0-8"/><path d="M12 21c-2.5-3 2.5-5 0-8s2.5-5 0-8"/><path d="M18 21c-2.5-3 2.5-5 0-8s2.5-5 0-8"/>',
 };
 export const abilityIcon = (timing, x, y, size, color) => ABILITY_ICONS[timing]
