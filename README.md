@@ -1,6 +1,6 @@
 # LFT Card Forge
 
-A card maker for **LOL, FIGHT TIEM!** by Hmm, Hmm! Games. It runs in the browser on PC, tablet and phone, and it installs as an offline app.
+A card maker for **LOL, FIGHT TIEM!** by Harper House Games. It runs in the browser on PC, tablet and phone, and it installs as an offline app.
 
 **Open it:** https://dustooned.github.io/lftcf/
 

@@ -2,12 +2,36 @@
 // can say which build they're on and anyone can find it again (the lftcf repo tags each one).
 // Bump SAVE_FORMAT only when the saved data shape changes in a way older Forges can't read,
 // and add a migration in upgrade().
-export const VERSION = '0.9.1';
+export const VERSION = '0.9.5';
 export const CODENAME = 'Quick Draw';
 export const RELEASED = '2026-10-04';
 export const SAVE_FORMAT = 1;
 
 export const CHANGELOG = [
+  { v: '0.9.5', name: 'Quick Draw', date: '2026-10-04', notes: [
+    '🖨 Print in real life: choose the paper (Letter, A4, Legal, Tabloid, A3, Super B), the card size (Poker, Bridge, Mini Euro, Tarot, Jumbo or custom), bleed, space between cards, crop marks and cut outlines, and backs (long- or short-edge double-sided, or separate pages). It fits as many cards per sheet as it can and remembers your choices.',
+    '💥 Direct and 🎛️ Control actions get their own emoji: on the card (“ACT · 💥 DIRECT”), in filters and pills, and on the family buttons with a short blurb each.',
+    'Long card names now shrink (and wrap to two lines) to stay clear of the cost bubble, and the bubble says SP COST.',
+    '🖨 The print window shows a to-scale preview of sheet 1 (front and back) that updates as you change options, and dialogs now fit any window size.',
+    '🕘 Version history: the whole changelog is in the Manual, and archived in the repo as docs/CARD_FORGE_VERSION_HISTORY.md.',
+  ] },
+  { v: '0.9.4', name: 'Quick Draw', date: '2026-10-04', notes: [
+    '😈 EXE is back with a real cost: it takes up two of your three ring slots. 🕹️ 1337 Tier is new: super rare, and it must be your only character in the ring. Both print that on the card, the game enforces it, and Backups still work the normal way (+2 HP).',
+    '🎴 Card back designer, right next to your decks: presets, big title / LFT badge / your logo, stripes or dots, an LFT watermark, colours and tagline. Playtest and SAGA files, the TTS sheet and print sheets use it automatically.',
+    '🖨 Print sheets now add a backs page after each page of cards, mirrored for double-sided printing (untick it in the print window to skip).',
+    'The studio is now Harper House Games: new card backs say so, and backs still showing the old default tagline update automatically.',
+    '🏷 The LOL, FIGHT TIEM! logo is always available: the Logo tool offers it on any card, e.g. as a watermark.',
+  ] },
+  { v: '0.9.3', name: 'Quick Draw', date: '2026-10-04', notes: [
+    '🏆 Tiers are 💩 Shit Tier, 😐 Mid Tier and 👑 GOD Tier, printed small after CHA at the top of the card, with a short blurb for each in the editor. (Saves still store low / mid / high.)',
+    '♾️ Passive (BIG STINK!) abilities show an infinity sign: always on.',
+    'The small print (set name, PLAYER-MADE CARD) sits on the HP line now, further from the trim edge.',
+    'Emoji labels on the editor’s fields (⚡ cost, ❤️ HP, 🏢 brand, 🤝 partners, 📜 rules…) so things are quicker to spot.',
+  ] },
+  { v: '0.9.2', name: 'Quick Draw', date: '2026-10-04', notes: [
+    '🎉 HEY, I’M HERE! abilities show a party popper, per the dev notes (❄️ NAP and 💨 STINK stay).',
+    'The builder uses game-dev names: On enter, Activated, Passive. Cards still print HEY, I’M HERE! / NAP TIEM! / BIG STINK!.',
+  ] },
   { v: '0.9.1', name: 'Quick Draw', date: '2026-10-04', notes: [
     '❄️ NAP TIEM! abilities now show a snowflake (on the card and in filters), since using one freezes the character. HEY keeps the waving hand; BIG STINK keeps its stink lines for now.',
     'Picking an ability type (HEY / NAP / STINK) writes its rules text for you, e.g. “When this enters your ring, …”, then you tune the effect.',

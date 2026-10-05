@@ -10,7 +10,7 @@ export const TRASH_DAYS = 30;
 // Brand silhouettes from tools/build.mjs shapeSpecFor, used when the base set is loaded.
 export const BASE_SHAPES = { 'Unassigned': 'circle', 'The Extremely Official Ninja Forum': 'hexagon', 'Snackforce 2000': 'triangle', 'B.O.R.E.D. Energy Drink': 'star5', 'PawSpace': 'pentagon', 'MegaMall After Dark': 'square', "Baby's First Apocalypse": 'star8' };
 export const FOLDER_ICONS = ['🃏', '🧪', '📁', '⭐', '🔥', '⚔️', '🛡️', '🐒', '🍔', '🥤', '🐾', '🛒', '☢️', '🎨', '💀', '✅', '🚧'];
-export const DEFAULT_BACK = { bg: '#171724', frame: '#aff57e', stripe: '#ff9ba7', ink: '#fff9eb', tagline: 'Hmm, Hmm! Games' };
+export const DEFAULT_BACK = { bg: '#171724', frame: '#aff57e', stripe: '#ff9ba7', ink: '#fff9eb', tagline: 'Harper House Games', layout: 'wordmark', pattern: 'stripes', watermark: 0, showSet: true };
 
 const num = (v, d) => (v !== '' && v != null && Number.isFinite(+v)) ? +v : d;
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -25,6 +25,7 @@ export function cleanLayer(L) {
   for (const k of ['sx', 'sy']) if (L[k] != null && num(L[k], 1) !== 1) o[k] = clamp(num(L[k], 1), 0.02, 50);
   if (L.label) o.label = String(L.label).slice(0, 40);
   if (L.draw && L.kind === 'image') o.draw = true;
+  if (L.kind === 'logo' && L.src === 'lft') o.src = 'lft';
   if (BLENDS[L.blend] && L.blend !== 'normal') o.blend = L.blend;
   if (LAYER_FX[L.fx] && L.fx !== 'none') Object.assign(o, { fx: L.fx, fxColor: hex(L.fxColor, ''), fxSize: clamp(num(L.fxSize, 1), 0.2, 3) });
   if (L.kind === 'image') {
@@ -58,7 +59,9 @@ export function upgrade(o) {
   p.assets = Object.fromEntries(Object.entries(p.assets || {}).filter(([k, v]) => SAFE_ID.test(k) && /^data:image\/(png|jpeg|webp|gif);base64,/.test(v)));
   p.sheet = { url: String(p.sheet?.url || ''), auto: !!p.sheet?.auto, last: String(p.sheet?.last || '') };
   const b = p.back || {};
-  p.back = { bg: hex(b.bg, DEFAULT_BACK.bg), frame: hex(b.frame, DEFAULT_BACK.frame), stripe: hex(b.stripe, DEFAULT_BACK.stripe), ink: hex(b.ink, DEFAULT_BACK.ink), tagline: String(b.tagline ?? DEFAULT_BACK.tagline).slice(0, 40), ...(SAFE_ID.test(b.logo) ? { logo: b.logo } : {}) };
+  p.back = { bg: hex(b.bg, DEFAULT_BACK.bg), frame: hex(b.frame, DEFAULT_BACK.frame), stripe: hex(b.stripe, DEFAULT_BACK.stripe), ink: hex(b.ink, DEFAULT_BACK.ink), tagline: String(b.tagline == null || b.tagline === 'Hmm, Hmm! Games' ? DEFAULT_BACK.tagline : b.tagline).slice(0, 40),
+    layout: ['wordmark', 'badge', 'logo'].includes(b.layout) ? b.layout : 'wordmark', pattern: ['stripes', 'dots', 'none'].includes(b.pattern) ? b.pattern : 'stripes',
+    watermark: clamp(num(b.watermark, 0), 0, 0.6), showSet: b.showSet !== false, ...(SAFE_ID.test(b.logo) ? { logo: b.logo } : {}) };
   const folderIds = new Set(p.folders.map(f => f.id));
   const gd = p.gameDecks || {};
   p.gameDecks = { Red: folderIds.has(gd.Red) ? gd.Red : '', Blue: folderIds.has(gd.Blue) ? gd.Blue : '' };
@@ -128,6 +131,47 @@ export function playtestDeckData(p, decks) {
     decks: decks.map(d => ({ id: d.id, name: `${d.icon || ''} ${d.name}`.trim(), cards: p.cards.filter(c => c.folders.includes(d.id)).map(c => c.id) })),
     cards: cards.map(toEngine),
   };
+}
+
+// ---- IRL printing: paper and card sizes in millimetres, and how many cards fit a sheet.
+export const PAPERS = {
+  letter: { w: 215.9, h: 279.4, label: 'US Letter 8.5×11 in' },
+  a4: { w: 210, h: 297, label: 'A4 210×297 mm' },
+  legal: { w: 215.9, h: 355.6, label: 'US Legal 8.5×14 in' },
+  tabloid: { w: 279.4, h: 431.8, label: 'Tabloid 11×17 in' },
+  a3: { w: 297, h: 420, label: 'A3 297×420 mm' },
+  superb: { w: 330.2, h: 482.6, label: 'Super B / A3+ 13×19 in' },
+};
+export const CARD_SIZES = {
+  poker: { w: 63, h: 88, label: 'Poker 63×88 mm (standard)' },
+  bridge: { w: 57, h: 89, label: 'Bridge 57×89 mm' },
+  mini: { w: 44, h: 63, label: 'Mini Euro 44×63 mm' },
+  tarot: { w: 70, h: 120, label: 'Tarot 70×120 mm' },
+  jumbo: { w: 89, h: 127, label: 'Jumbo 3.5×5 in' },
+};
+export const PRINT_DEFAULTS = { paper: 'letter', card: 'poker', cw: 63, ch: 88, bleed: 0, gap: 0, margin: 6, marks: 'crop', outline: true, backs: 'long' };
+/** Grid for one sheet. Tries portrait and landscape and keeps whichever fits more cards. All sizes in mm. */
+export function printLayout(o) {
+  const paper = PAPERS[o.paper] || PAPERS.letter, card = o.card === 'custom' ? { w: +o.cw || 63, h: +o.ch || 88 } : CARD_SIZES[o.card] || CARD_SIZES.poker;
+  const bleed = Math.max(0, +o.bleed || 0), gap = Math.max(0, +o.gap || 0), margin = Math.max(3, +o.margin || 6);
+  const cellW = card.w + bleed * 2, cellH = card.h + bleed * 2;
+  const fit = (pw, ph) => {
+    const cols = Math.max(0, Math.floor((pw - margin * 2 + gap) / (cellW + gap))), rows = Math.max(0, Math.floor((ph - margin * 2 + gap) / (cellH + gap)));
+    const gw = cols * cellW + Math.max(0, cols - 1) * gap, gh = rows * cellH + Math.max(0, rows - 1) * gap;
+    return { pageW: pw, pageH: ph, cols, rows, perPage: cols * rows, x0: (pw - gw) / 2, y0: (ph - gh) / 2 };
+  };
+  const port = fit(paper.w, paper.h), land = fit(paper.h, paper.w);
+  const best = land.perPage > port.perPage ? { ...land, landscape: true } : { ...port, landscape: false };
+  return { ...best, cardW: card.w, cardH: card.h, cellW, cellH, bleed, gap, margin };
+}
+/** Where each card sits on a sheet (cell top-left, mm). Backs mirror the columns (long-edge flip) or the rows (short-edge flip). */
+export function printCells(L, side = 'front', flip = 'long') {
+  const out = [];
+  for (let r = 0; r < L.rows; r++) for (let c = 0; c < L.cols; c++) {
+    const cc = side === 'back' && flip === 'long' ? L.cols - 1 - c : c, rr = side === 'back' && flip === 'short' ? L.rows - 1 - r : r;
+    out.push({ x: L.x0 + cc * (L.cellW + L.gap), y: L.y0 + rr * (L.cellH + L.gap) });
+  }
+  return out;
 }
 
 // ---- reading a .lftdeck.json back in

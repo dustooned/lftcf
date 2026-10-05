@@ -18,7 +18,7 @@ export const PASSIVES = {
   noCounter: "Can't counterattack",
   needsBackup: 'Needs a Backup to attack',
 };
-export const TIMINGS = { none: 'No ability', entry: "On entry — HEY, I'M HERE!", activated: 'Activated — NAP TIEM!', passive: 'Passive — BIG STINK!' };
+export const TIMINGS = { none: 'No ability', entry: "🎉 On enter — HEY, I'M HERE!", activated: '❄️ Activated (freezes it) — NAP TIEM!', passive: '♾️ Passive (always on) — BIG STINK!' };
 export const LIMITS = { cost: [0, 10], hp: [1, 20], amount: [1, 10], abilityCost: [0, 5], ward: [1, 5] };
 
 const TGT = { enemy: 'an opposing CHA', friendly: 'a friendly CHA', any: 'any ring CHA' };
@@ -55,6 +55,9 @@ export function autoText(c) {
   if (c.timing === 'entry' && c.effect) parts.push(`When this enters your ring, ${effectPhrase(c.effect)}.`);
   if (c.timing === 'activated' && c.effect) parts.push(`Freeze this character${c.abilityCost ? ` and pay ${c.abilityCost} SP` : ''}: ${effectPhrase(c.effect)}.`);
   if (c.passive) parts.push(passivePhrase(c));
+  // Ring-space rules print on the card so nobody has to remember them.
+  if (c.tier === 'leet') parts.push('1337: this must be your only character in the ring.');
+  else if (c.edgelord) parts.push('EXE: takes up two ring slots.');
   return parts.join(' ') || 'No ability.';
 }
 
@@ -90,7 +93,7 @@ export function normalize(c) {
   if (c.abilityCost != null) c.abilityCost = Math.round(num(c.abilityCost, 1));
   if (c.ward != null) c.ward = Math.round(num(c.ward, 1));
   if (c.effect?.amount != null) c.effect.amount = Math.round(num(c.effect.amount, 1));
-  if (!['low', 'mid', 'high'].includes(c.tier)) c.tier = c.type === 'CHA' ? 'low' : c.tier;
+  if (!['low', 'mid', 'high', 'leet'].includes(c.tier)) c.tier = c.type === 'CHA' ? 'low' : c.tier;
   if (c.type === 'ACT' && !['direct', 'control'].includes(c.family)) c.family = 'direct';
   for (const k of ['tags', 'partners']) if (c[k] != null) c[k] = [].concat(c[k]).map(String).filter(Boolean);
   if (c.type === 'ACT') {

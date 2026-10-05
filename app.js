@@ -1,10 +1,10 @@
-import { W, H, ART, FONTS, SHAPES, SHAPE_LABELS, TIMING_LABEL, esc, cardInner, cardSVG, backSVG, handlesMarkup, layerTransform, layerBox, accentFor, shapeIcon, shapeMarkup, isHolo, MASKS, BLENDS, LAYER_FX, FX_COLOR, EDIT_REGIONS } from './render.js';
+import { W, H, ART, TIER_INFO, EXE_INFO, ACT_INFO, BACK_LAYOUTS, BACK_PATTERNS, lftMark, FONTS, SHAPES, SHAPE_LABELS, TIMING_LABEL, esc, cardInner, cardSVG, backSVG, handlesMarkup, layerTransform, layerBox, accentFor, shapeIcon, shapeMarkup, isHolo, MASKS, BLENDS, LAYER_FX, FX_COLOR, EDIT_REGIONS } from './render.js';
 import { I } from './icons.js';
 import { EFFECTS, TARGET_LABELS, PASSIVES, TIMINGS, LIMITS, autoText, normalize, newCard, uniqueCardId, slug, newId, defaultLayout, toEngine, fromEngine, validate, parseAbility, randomName, randomAbility, toCSV, parseCSV, rowsToCards, cardsToRows, CSV_COLUMNS, SHEET_HELP } from './model.js';
 import * as store from './store.js';
 import { VERSION, SAVE_FORMAT, CODENAME, RELEASED, CHANGELOG } from './version.js';
 import { embed, extract } from './png-meta.js';
-import { SAFE_ID, DECK_SIZE, BASE_SHAPES, FOLDER_ICONS, TRASH_DAYS, DEFAULT_BACK, upgrade, registerNames as regNames, usedAssets, deckReport, deckStats, gameDecksJson, readability, playtestDeckData , lftDeckToProject } from './project.js';
+import { SAFE_ID, DECK_SIZE, BASE_SHAPES, FOLDER_ICONS, TRASH_DAYS, DEFAULT_BACK, upgrade, registerNames as regNames, usedAssets, deckReport, deckStats, gameDecksJson, readability, playtestDeckData , lftDeckToProject, PAPERS, CARD_SIZES, PRINT_DEFAULTS, printLayout, printCells } from './project.js';
 
 const JSZIP = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm';
 const XLSX = 'https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs';
@@ -32,12 +32,12 @@ let P = null;                 // the project (set): { setName, brands, tags, fol
 const ui = { lastPick: null, view: 'library', cur: null, sel: null, field: null, drawId: null, sec: 'stats', dockTab: 'style', folder: 'all', selecting: false, picked: new Set(), f: { q: '', type: 'all', tier: 'all', brand: 'all', tag: 'all', sort: 'num', trig: 'all' } };
 // Ability categories: a Character's trigger (the banner words), or an Action's family.
 const TRIGGERS = {
-  none:          { icon: '▫️', short: 'NONE',  label: 'No ability' },
-  entry:         { icon: '👋', short: 'HEY!',  label: "HEY, I'M HERE! (on entry)" },
-  activated:     { icon: '❄️', short: 'NAP',   label: 'NAP TIEM! (activated)' },
-  passive:       { icon: '💨', short: 'STINK', label: 'BIG STINK! (passive)' },
-  'act-direct':  { icon: '▲',  short: 'DIRECT', label: 'Action: direct' },
-  'act-control': { icon: '⬢',  short: 'CONTROL', label: 'Action: control' },
+  none:          { icon: '▫️', short: 'None',      label: 'No ability' },
+  entry:         { icon: '🎉', short: 'On enter',  label: "On enter: triggers when it comes into play (HEY, I'M HERE!)" },
+  activated:     { icon: '❄️', short: 'Activated', label: 'Activated: freeze it (and pay SP) to use (NAP TIEM!)' },
+  passive:       { icon: '♾️', short: 'Passive',   label: 'Passive: always on while in the ring (BIG STINK!)' },
+  'act-direct':  { icon: '💥', short: 'Direct',  label: 'Direct action: hits right away (damage, healing, Player HP)' },
+  'act-control': { icon: '🎛️', short: 'Control', label: 'Control action: changes the board (freeze, unfreeze, return, draw)' },
 };
 // Backups as the designers play them now (co-dev notes after the first playtest).
 const BACKUP_RULE = 'A Backup comes from your hand: same brand, or on the host’s Partner list. Once per turn, never on a character that just came into play, and it gives the host +2 HP.';
@@ -63,9 +63,10 @@ function trashCards(cards) {
   P.trash.unshift(...cards.map(card => ({ at, card })));
   P.cards = P.cards.filter(c => !cards.includes(c));
 }
-function ask({ title, body = '', buttons = [{ label: 'OK', value: 'ok', primary: true }] }) {
+function ask({ title, body = '', buttons = [{ label: 'OK', value: 'ok', primary: true }], wide = false }) {
   const m = $('#modal'), f = $('#modalForm');
   if (m.open) m.close();
+  m.classList.toggle('wide', wide);
   f.innerHTML = `<div class="panel-h">${title}</div><div class="body">${body}</div><div class="foot">${buttons.map(b => `<button class="btn ${b.primary ? 'primary' : ''} ${b.danger ? 'danger-btn' : ''}" value="${b.value}">${b.label}</button>`).join('')}</div>`;
   m.returnValue = '';
   m.showModal();
@@ -143,10 +144,10 @@ function openEditor(uid) { ui.cur = uid; ui.sel = null; ui.field = null; ui.draw
 // "Decks" in the UI are `folders` in the data (a card can sit in several). A deck is
 // tournament-legal at exactly DECK_SIZE cards with distinct names (see src/rules.lua).
 const inFolder = (c, f = ui.folder) => f === 'all' || (f === 'unfiled' ? !c.folders.length : c.folders.includes(f));
-const folderName = id => id === 'all' ? 'All cards' : id === 'unfiled' ? 'Not in a deck' : id === 'trash' ? 'Trash' : P.folders.find(f => f.id === id)?.name || '';
+const folderName = id => id === 'all' ? 'All cards' : id === 'unfiled' ? 'Not in a deck' : id === 'trash' ? 'Trash' : id === 'back' ? 'Card back' : P.folders.find(f => f.id === id)?.name || '';
 const deckStatus = id => deckReport(P, id);
 function renderFolders() {
-  if (!['all', 'unfiled', 'trash'].includes(ui.folder) && !P.folders.some(f => f.id === ui.folder)) ui.folder = 'all';
+  if (!['all', 'unfiled', 'trash', 'back'].includes(ui.folder) && !P.folders.some(f => f.id === ui.folder)) ui.folder = 'all';
   const row = (id, icon, name, count, edit) => `<div class="folder ${ui.folder === id ? 'on' : ''}" data-folder="${id}">
     <button class="fbtn" data-open-folder="${id}" title="${esc(name)}"><span class="ficon">${icon}</span><span class="fname">${esc(name)}</span><span class="fcount">${count}</span></button>
     ${edit ? `<button class="fmenu" data-edit-folder="${id}" title="Rename, duplicate, back up or delete" aria-label="Deck options for ${esc(name)}">⋯</button>` : ''}</div>`;
@@ -155,12 +156,13 @@ function renderFolders() {
     <div class="folder-sep"></div>
     ${P.folders.map(f => { const s = deckStatus(f.id); return row(f.id, f.icon, f.name, `${s.n}${s.legal ? ' ✓' : ''}`, true); }).join('')}
     <button class="btn small newfolder" id="newFolder">+ New deck</button>
-    <div class="folder-sep"></div>${row('trash', '🗑️', 'Trash', P.trash.length)}`;
+    <div class="folder-sep"></div>${row('back', '🎴', 'Card back', '')}${row('trash', '🗑️', 'Trash', P.trash.length)}`;
 }
 const welcomeArt = `<svg viewBox="0 0 220 150" aria-hidden="true"><g transform="rotate(-8 70 80)"><rect x="30" y="20" width="80" height="112" rx="8" fill="#171724"/><rect x="34" y="24" width="72" height="104" rx="6" fill="#fff9eb"/><rect x="38" y="28" width="64" height="22" rx="4" fill="#ff9ba7"/><rect x="38" y="56" width="64" height="34" fill="#89e4d7"/></g><g transform="rotate(7 150 80)"><rect x="110" y="20" width="80" height="112" rx="8" fill="#171724"/><rect x="114" y="24" width="72" height="104" rx="6" fill="#fff9eb"/><rect x="118" y="28" width="64" height="22" rx="4" fill="#ffda52"/><rect x="118" y="56" width="64" height="34" fill="#ceacff"/><text x="150" y="80" text-anchor="middle" font-family="Arial" font-weight="900" font-size="22" fill="#171724">?</text></g><polygon points="110,6 115,18 128,18 118,26 122,38 110,31 98,38 102,26 92,18 105,18" fill="#ffda52" stroke="#171724" stroke-width="3"/></svg>`;
 function renderLibrary() {
   renderFolders();
   if (ui.folder === 'trash') return renderTrash();
+  if (ui.folder === 'back') return renderBackView();
   const f = ui.f;
   $('#fBrand').innerHTML = `<option value="all">Any brand</option>` + P.brands.map(b => `<option ${f.brand === b.name ? 'selected' : ''}>${esc(b.name)}</option>`).join('');
   $('#fTag').innerHTML = `<option value="all">Any allegiance</option>` + P.tags.map(t => `<option ${f.tag === t ? 'selected' : ''}>${esc(t)}</option>`).join('');
@@ -171,7 +173,7 @@ function renderLibrary() {
   const q = f.q.toLowerCase();
   const list = P.cards.map((c, i) => ({ c, i })).filter(({ c }) => inFolder(c) &&
     (!q || [c.name, c.text, c.origin, c.flavor, ...(c.tags || [])].join(' ').toLowerCase().includes(q)) &&
-    (f.type === 'all' || c.type === f.type) &&
+    (f.type === 'all' || (f.type === 'EXE' ? c.type === 'CHA' && c.edgelord : c.type === f.type)) &&
     (f.tier === 'all' || c.tier === f.tier) && (f.brand === 'all' || c.origin === f.brand) &&
     (f.tag === 'all' || (c.tags || []).includes(f.tag) || (c.partners || []).includes(f.tag)) &&
     (f.trig === 'all' || triggerOf(c) === f.trig));
@@ -203,7 +205,7 @@ function renderLibrary() {
     const fIcons = c.folders.map(id => P.folders.find(x => x.id === id)?.icon).filter(Boolean).join('');
     return `<button class="tile ${picked ? 'picked' : ''} ${isHolo(c) ? 'holo' : ''}" data-uid="${c.uid}" title="${ui.selecting ? 'Select' : 'Edit'} ${esc(c.name)} (hold to drag)" ${ui.selecting ? `aria-pressed="${picked}"` : ''}>
       <div class="card-wrap">${thumbImg(c, i)}${errs ? `<span class="badge" title="${errs} problem(s)">!</span>` : ''}${ui.selecting ? `<span class="pick">${picked ? '✓' : ''}</span>` : ''}</div>
-      <div class="cap"><b>${esc(c.name)}</b><span class="pill">${c.type}</span><span class="pill">${c.cost} SP</span><span class="pill trig" title="${esc(TRIGGERS[triggerOf(c)]?.label)}">${TRIGGERS[triggerOf(c)]?.icon} ${TRIGGERS[triggerOf(c)]?.short}</span>${c.type === 'CHA' ? `<span class="pill">${c.hp} HP</span>` : ''}${fIcons ? `<span title="In decks">${fIcons}</span>` : ''}</div></button>`;
+      <div class="cap"><b>${esc(c.name)}</b><span class="pill">${c.type}</span>${c.type === 'CHA' && c.tier === 'leet' ? '<span class="pill exe">🕹️ 1337</span>' : c.type === 'CHA' && c.edgelord ? '<span class="pill exe">😈 EXE</span>' : ''}<span class="pill">${c.cost} SP</span><span class="pill trig" title="${esc(TRIGGERS[triggerOf(c)]?.label)}">${TRIGGERS[triggerOf(c)]?.icon} ${TRIGGERS[triggerOf(c)]?.short}</span>${c.type === 'CHA' ? `<span class="pill">${c.hp} HP</span>` : ''}${fIcons ? `<span title="In decks">${fIcons}</span>` : ''}</div></button>`;
   }).join(''));
   queueThumbs();
 }
@@ -218,6 +220,46 @@ function deckSummary(fo) {
     <div class="ds-box"><b>Deck check</b><p class="ds-legal ${s.legal ? 'ok' : 'warnc'}">${s.legal ? '✓ Ready: 20 cards, all different.' : `Not tournament-legal yet: ${esc(s.note)}.`}</p>${side ? `<small>${side === 'Red' ? '🔴' : '🔵'} ${side} deck in the Tabletop Simulator game</small>` : ''}</div>
   </div>`;
 }
+// ---- Card back: one design for the whole set. It goes into every export on its own: the playtest /
+// SAGA deck file, the Tabletop Simulator sheet and back.png, and the backs pages of a print sheet.
+const BACK_PRESETS = {
+  'LFT Classic': { bg: '#171724', frame: '#aff57e', stripe: '#ff9ba7', ink: '#fff9eb' },
+  Midnight: { bg: '#0f1530', frame: '#89d6ff', stripe: '#ceacff', ink: '#f4f4ff' },
+  Toxic: { bg: '#173300', frame: '#ffda52', stripe: '#aff57e', ink: '#eaffd6' },
+  Bubblegum: { bg: '#ff71ce', frame: '#fff9eb', stripe: '#01cdfe', ink: '#3b1060' },
+  Paper: { bg: '#fff9eb', frame: '#171724', stripe: '#c6cde3', ink: '#171724' },
+};
+function renderBackView() {
+  const bk = P.back, col = (k, l) => `<label class="bk-col"><input type="color" data-bk="${k}" value="${esc(bk[k])}"> ${l}</label>`;
+  const seg = (k, opts) => `<div class="seg wide">${Object.entries(opts).map(([v, l]) => `<button type="button" data-bkset="${k}" data-v="${v}" aria-pressed="${(bk[k] || '') === v}">${l}</button>`).join('')}</div>`;
+  $('#libTitle').textContent = '🎴 Card back';
+  $('#libTools').hidden = true; $('#selbar').hidden = true;
+  $('#libCount').textContent = 'One back for the whole set';
+  $('#folderActs').innerHTML = '';
+  $('#grid').innerHTML = `<div class="backview">
+    <div class="bv-prev" id="backPrevBig">${backMarkup(0.62, true)}</div>
+    <div class="bv-ctl">
+      <p class="bv-auto">✅ Used automatically in <b>🕹 Send to playtest</b> (playtest table and SAGA), the <b>Tabletop Simulator</b> sheet and <code>back.png</code>, and the backs pages when you <b>🖨 Print</b>.</p>
+      <div class="field"><span class="lbl">🎨 Looks</span><div class="chips">${Object.keys(BACK_PRESETS).map(p => `<button type="button" class="chip" data-bkpreset="${esc(p)}">${p}</button>`).join('')}</div></div>
+      <div class="field"><span class="lbl">🖼 Center</span>${seg('layout', BACK_LAYOUTS)}
+        <div class="btnrow" style="margin-top:6px"><button type="button" class="btn small" data-bkact="logo">🏷 ${bk.logo ? 'Change' : 'Upload'} your logo</button>${bk.logo ? '<button type="button" class="btn small" data-bkact="logoDel">✕ Remove logo</button>' : ''}</div>
+        <div class="help">The LOL, FIGHT TIEM! badge is always available: pick <b>LFT badge</b>, or use it as a faint watermark below.</div></div>
+      <div class="field"><span class="lbl">▦ Pattern</span>${seg('pattern', BACK_PATTERNS)}</div>
+      <div class="field"><label class="slider inline">💧 LFT watermark <input type="range" data-bk="watermark" min="0" max="0.6" step="0.05" value="${bk.watermark || 0}"></label></div>
+      <div class="field"><span class="lbl">🌈 Colours</span><div class="bk-cols">${col('bg', 'Background')}${col('frame', 'Frame')}${col('stripe', 'Pattern')}${col('ink', 'Text')}</div></div>
+      <div class="field"><label for="bkTag">✏️ Tagline</label><input type="text" id="bkTag" data-bk="tagline" value="${esc(bk.tagline)}" maxlength="40"></div>
+      <label class="inline small"><input type="checkbox" data-bk="showSet" ${bk.showSet !== false ? 'checked' : ''}> Show the set name (“${esc(P.setName)}”)</label>
+      <div class="btnrow" style="margin-top:12px"><button type="button" class="btn primary" data-bkact="png">⬇ Back as PNG</button><button type="button" class="btn" data-bkact="reset">↺ Reset</button></div>
+    </div></div>`;
+}
+const refreshBack = () => { const el = $('#backPrevBig'); if (el) el.innerHTML = backMarkup(0.62, true); };
+$('#grid').addEventListener('input', e => {
+  const k = e.target.dataset.bk; if (!k || ui.folder !== 'back') return;
+  P.back[k] = e.target.type === 'checkbox' ? e.target.checked : e.target.type === 'range' ? +e.target.value : e.target.value;
+  save(); refreshBack();
+});
+$('#grid').addEventListener('change', e => { if (e.target.dataset.bk === 'showSet') { P.back.showSet = e.target.checked; save(); refreshBack(); } });
+
 // ---- Trash view: deleted cards wait here for TRASH_DAYS days.
 function renderTrash() {
   $('#libTitle').textContent = '🗑️ Trash';
@@ -449,7 +491,7 @@ function dropTargetAt(x, y) {
   const el = document.elementFromPoint(x, y)?.closest('[data-drop],[data-folder]');
   if (!el) return null;
   const id = el.dataset.drop ?? el.dataset.folder;
-  return id === 'all' || id === ui.folder ? null : { el, id };
+  return id === 'all' || id === 'back' || id === ui.folder ? null : { el, id };
 }
 function moveDrag(x, y) {
   drag.x = x; drag.y = y;
@@ -967,7 +1009,7 @@ function setRulesText(v) {
 }
 
 // ---------------------------------------------------------------- editor: layers
-const layerName = L => L.label || (L.kind === 'logo' ? 'Brand logo' : L.kind === 'image' ? (L.name || 'Image') : L.kind === 'text' ? `“${L.text}”` : SHAPE_LABELS[L.shape] || 'Shape');
+const layerName = L => L.label || (L.kind === 'logo' ? (L.src === 'lft' ? 'LOL, FIGHT TIEM! logo' : 'Brand logo') : L.kind === 'image' ? (L.name || 'Image') : L.kind === 'text' ? `“${L.text}”` : SHAPE_LABELS[L.shape] || 'Shape');
 const layerIcon = L => L.kind === 'logo' ? `<span class="thumb">${I.logo}</span>` : L.kind === 'image' ? `<img class="thumb img" src="${href(L.asset)}" alt="">`
   : L.kind === 'text' ? `<span class="thumb txt" style="color:${esc(L.color || '#171724')}">Aa</span>` : `<span class="thumb">${shapeIcon(L.shape, L.fill, 22)}</span>`;
 
@@ -1073,7 +1115,7 @@ function renderLayerBar() {
   bar.innerHTML = head + tabBar + `<div class="dock-body">${dockBody(c, L, tab)}</div>`;
 }
 // ---- card text in the dock: tap a part of the card, change it here
-const FIELD_LABEL = { name: 'Name', cost: 'Cost', hp: 'HP', origin: 'Brand', banner: 'Ability', text: 'Rules & lore', partners: 'Partners' };
+const FIELD_LABEL = { name: '🏷️ Name', cost: '⚡ Cost', hp: '❤️ HP', origin: '🏢 Brand & tier', banner: '✨ Ability', text: '📜 Rules & lore', partners: '🤝 Partners' };
 const numStep = (path, v, label) => `<span class="dk-step" role="group" aria-label="${label}"><button type="button" class="dk-ic" data-fa="step" data-path="${path}" data-d="-1" aria-label="Less">${I.minus}</button><input type="number" class="dk-num" data-ff="${path}" value="${v ?? 0}" inputmode="numeric" aria-label="${label}"${path === 'cost' || path === 'hp' ? ' data-focus' : ''}><button type="button" class="dk-ic" data-fa="step" data-path="${path}" data-d="1" aria-label="More">${I.plus}</button></span>`;
 const softBtn = (fa, v, label, on) => `<button type="button" data-fa="${fa}" data-v="${esc(v)}" aria-pressed="${!!on}">${label}</button>`;
 function fieldDock(c, key) {
@@ -1084,12 +1126,12 @@ function fieldBody(c, key) {
   const e = c.effect, spec = e && EFFECTS[e.kind];
   if (key === 'name') return `<div class="dock-row"><input type="text" class="dk-text" data-ff="name" value="${esc(c.name)}" maxlength="40" aria-label="Card name" data-focus>${dkBtn('randName', '🎲', 'Random').replace('data-la', 'data-fa')}</div>
     <div class="dock-row">${softBtn('type', 'CHA', '🥊 Character', c.type === 'CHA')}${softBtn('type', 'ACT', '⚡ Action', c.type === 'ACT')}<span class="dock-note">Double-click card text to type right on the card.</span></div>`;
-  if (key === 'cost') return `<div class="dock-row"><span class="dk-lbl">SP to play</span>${numStep('cost', c.cost, 'Cost')}${c.type === 'CHA' ? `<span class="dk-lbl">HP</span>${numStep('hp', c.hp, 'HP').replace(' data-focus', '')}` : ''}</div>`;
+  if (key === 'cost') return `<div class="dock-row"><span class="dk-lbl">⚡ SP to play</span>${numStep('cost', c.cost, 'Cost')}${c.type === 'CHA' ? `<span class="dk-lbl">HP</span>${numStep('hp', c.hp, 'HP').replace(' data-focus', '')}` : ''}</div>`;
   if (key === 'hp') return `<div class="dock-row"><span class="dk-lbl">HP</span>${numStep('hp', c.hp, 'HP')}<span class="dk-lbl">Cost</span>${numStep('cost', c.cost, 'Cost').replace(' data-focus', '')}<span class="dock-note">HP is also how hard it hits.</span></div>`;
   if (key === 'origin') return c.type === 'CHA'
     ? `<div class="chips dk-chips">${P.brands.map(b => `<button type="button" class="chip" data-fa="brand" data-v="${esc(b.name)}" aria-pressed="${c.origin === b.name}">${shapeIcon(b.shape, b.color || 'currentColor', 16)} ${esc(b.name)}</button>`).join('')}<button type="button" class="chip" data-fa="newBrand">＋ New brand</button></div>
-      <div class="dock-row"><span class="dk-lbl">Tier</span><div class="seg-soft">${['low', 'mid', 'high'].map(t => softBtn('tier', t, cap(t), c.tier === t)).join('')}</div></div>`
-    : `<div class="dock-row"><div class="seg-soft">${softBtn('family', 'direct', '▲ Direct', c.family === 'direct')}${softBtn('family', 'control', '⬢ Control', c.family === 'control')}</div><span class="dock-note">Actions have a family instead of a brand.</span></div>`;
+      <div class="dock-row"><span class="dk-lbl">Tier</span><div class="seg-soft">${Object.keys(TIER_INFO).map(t => softBtn('tier', t, `${TIER_INFO[t].icon} ${TIER_INFO[t].name}`, c.tier === t)).join('')}</div><span class="dock-note">${esc(TIER_INFO[c.tier]?.blurb || '')}</span></div>`
+    : `<div class="dock-row"><div class="seg-soft">${softBtn('family', 'direct', '💥 Direct', c.family === 'direct')}${softBtn('family', 'control', '🎛️ Control', c.family === 'control')}</div><span class="dock-note">${esc(ACT_INFO[c.family]?.blurb || '')}</span></div>`;
   if (key === 'banner') return `${c.type === 'CHA' ? `<div class="dock-row"><div class="seg-soft">${Object.keys(TIMINGS).map(k => softBtn('timing', k, `${TRIGGERS[k].icon} ${TRIGGERS[k].short}`, c.timing === k)).join('')}</div></div>` : ''}
     <div class="dock-row"><input type="text" class="dk-text" data-ff="layout.banner" value="${esc(c.layout.banner || '')}" maxlength="28" placeholder="${esc(c.type === 'CHA' ? TIMING_LABEL[c.timing] : 'ACT / RESOLVE & DISCARD')}" aria-label="Ability name" data-focus><span class="dock-note">Give the ability its own name, or leave it blank.</span></div>`;
   if (key === 'text') return `<textarea class="dk-area" data-ff="text" rows="3" aria-label="Rules text" placeholder="Say what it does, e.g. “when this enters, deal 2 damage to an enemy”" data-focus>${esc(c.text)}</textarea>
@@ -1492,10 +1534,13 @@ async function stickerPicker() {
   if (kind === 'shape') addLayer({ kind: 'shape', shape: a, fill: b, stroke: '#171724', x: 395, y: 250, zone: 'top', scale: 0.8 });
   else addLayer({ kind: 'text', text: a, color: b, stroke: '#171724', font: 'Impact', size: 44, x: 360, y: 250, zone: 'top', rot: -10 });
 }
-function addLogo() {
+async function addLogo() {
   const c = cur(); if (!c) return toast('Make or open a card first.', true);
-  if (c.type === 'CHA' && !P.brands.find(b => b.name === c.origin)?.logo) toast('Tip: upload a logo for this brand in the Brands tab. Until then it shows the brand shape.');
-  addLayer({ kind: 'logo', x: 250, y: 301, zone: 'top', scale: 1.2, opacity: 0.35 });
+  const brandLogo = c.type === 'CHA' && P.brands.find(b => b.name === c.origin)?.logo;
+  const v = await ask({ title: '🏷 Add a logo', body: `<div class="sticker-grid"><button value="lft"><svg viewBox="0 0 120 120">${lftMark(60, 60, 100)}</svg>LOL, FIGHT TIEM!</button><button value="brand"><svg viewBox="0 0 120 120">${brandLogo ? `<image href="${href(brandLogo)}" x="10" y="10" width="100" height="100" preserveAspectRatio="xMidYMid meet"/>` : shapeMarkup(P.brands.find(b => b.name === c.origin)?.shape || 'circle', 60, 60, 46, '#171724', 0.8)}</svg>${c.type === 'CHA' ? esc(c.origin) : 'Brand'} logo</button></div><p class="muted small">Both start as a faint watermark over the art. Change the opacity in Transform.</p>`, buttons: [{ label: 'Cancel', value: '' }] });
+  if (!v) return;
+  if (v === 'brand' && c.type === 'CHA' && !brandLogo) toast('Tip: upload a logo for this brand in the Brands tab. Until then it shows the brand shape.');
+  addLayer({ kind: 'logo', ...(v === 'lft' ? { src: 'lft', name: 'LOL, FIGHT TIEM! logo' } : {}), x: 250, y: 301, zone: 'top', scale: 1.2, opacity: 0.35 });
 }
 function addText() { addLayer({ kind: 'text', text: 'Your text', color: '#ffffff', stroke: '#171724', font: 'Impact', size: 40, x: 250, y: 301, zone: 'top' }); }
 
@@ -1515,17 +1560,18 @@ function renderInspector() {
 }
 function secStats(c) {
   return `
-  <div class="field"><label for="fName">Card name</label><div class="inline"><input type="text" id="fName" data-f="name" value="${esc(c.name)}" maxlength="40"><button class="btn" data-act="randName" title="Random name">🎲</button></div></div>
-  <div class="field"><span class="lbl">Card type</span><div class="seg wide">${segBtn('type', 'CHA', 'Character', c.type)}${segBtn('type', 'ACT', 'Action', c.type)}</div></div>
+  <div class="field"><label for="fName">🏷️ Card name</label><div class="inline"><input type="text" id="fName" data-f="name" value="${esc(c.name)}" maxlength="40"><button class="btn" data-act="randName" title="Random name">🎲</button></div></div>
+  <div class="field"><span class="lbl">🃏 Card type</span><div class="seg wide">${segBtn('type', 'CHA', '🥊 Character', c.type)}${segBtn('type', 'ACT', '⚡ Action', c.type)}</div></div>
   ${c.type === 'CHA' ? `
-    <div class="field"><span class="lbl">Tier</span><div class="seg wide">${['low', 'mid', 'high'].map(t => segBtn('tier', t, cap(t), c.tier)).join('')}</div></div>
-    ${c.edgelord ? `<div class="field"><label style="text-transform:none;font-size:13px;color:inherit"><input type="checkbox" data-f="edgelord" checked> Old “Edgelord” tag <span class="muted">(retired, does nothing; untick to clear)</span></label></div>` : ''}`
-    : `<div class="field"><span class="lbl">Action family</span><div class="seg wide">${segBtn('family', 'direct', '▲ Direct', c.family)}${segBtn('family', 'control', '⬢ Control', c.family)}</div></div>`}
-  <div class="two"><div class="field"><span class="lbl">Cost (SP)</span>${stepper('cost', c.cost, 'Cost')}</div>
-  ${c.type === 'CHA' ? `<div class="field"><span class="lbl">HP</span>${stepper('hp', c.hp, 'HP')}</div>` : ''}</div>
-  <div class="field"><span class="lbl">Decks</span><div class="chips">${P.folders.map(f => `<button type="button" class="chip" data-folder-toggle="${f.id}" aria-pressed="${c.folders.includes(f.id)}">${f.icon} ${esc(f.name)}</button>`).join('')}<button type="button" class="chip" data-act="newFolder">＋ New deck</button></div></div>
-  <div class="field"><label for="fFlavor">Flavor / lore</label><textarea id="fFlavor" data-f="flavor" rows="2" maxlength="140" placeholder="A one-liner printed in italics (optional)">${esc(c.flavor || '')}</textarea></div>
-  <div class="field"><label for="fNote">Designer notes</label><textarea id="fNote" data-f="note" rows="2" placeholder="Lore, ideas, balance notes. Exported with the data, never printed">${esc(c.note || '')}</textarea></div>
+    <div class="field"><span class="lbl">🏆 Tier</span><div class="seg wide">${Object.keys(TIER_INFO).map(t => segBtn('tier', t, `${TIER_INFO[t].icon} ${TIER_INFO[t].name}`, c.tier)).join('')}</div>
+      <ul class="tier-help">${Object.keys(TIER_INFO).map(t => `<li class="${c.tier === t ? 'on' : ''}"><b>${TIER_INFO[t].icon} ${TIER_INFO[t].name}</b> ${esc(TIER_INFO[t].blurb)}</li>`).join('')}</ul></div>
+    <div class="field"><label style="text-transform:none;font-size:13px;color:inherit"><input type="checkbox" data-f="edgelord" ${c.edgelord ? 'checked' : ''} ${c.tier === 'leet' ? 'disabled' : ''}> ${EXE_INFO.icon} <b>EXE</b> (Edgelord summon)</label><div class="help">${c.tier === 'leet' ? 'A 1337 card already fills the whole ring.' : esc(EXE_INFO.blurb) + ' Backups still attach normally (+2 HP).'}</div></div>`
+    : `<div class="field"><span class="lbl">🎬 Action family</span><div class="seg wide">${segBtn('family', 'direct', '💥 Direct', c.family)}${segBtn('family', 'control', '🎛️ Control', c.family)}</div><ul class="tier-help">${Object.entries(ACT_INFO).map(([k, a]) => `<li class="${c.family === k ? 'on' : ''}"><b>${a.icon} ${a.name}</b> ${esc(a.blurb)}</li>`).join('')}</ul></div>`}
+  <div class="two"><div class="field"><span class="lbl">⚡ Cost (SP)</span>${stepper('cost', c.cost, 'Cost')}</div>
+  ${c.type === 'CHA' ? `<div class="field"><span class="lbl">❤️ HP</span>${stepper('hp', c.hp, 'HP')}</div>` : ''}</div>
+  <div class="field"><span class="lbl">🗂️ Decks</span><div class="chips">${P.folders.map(f => `<button type="button" class="chip" data-folder-toggle="${f.id}" aria-pressed="${c.folders.includes(f.id)}">${f.icon} ${esc(f.name)}</button>`).join('')}<button type="button" class="chip" data-act="newFolder">＋ New deck</button></div></div>
+  <div class="field"><label for="fFlavor">💬 Flavor / lore</label><textarea id="fFlavor" data-f="flavor" rows="2" maxlength="140" placeholder="A one-liner printed in italics (optional)">${esc(c.flavor || '')}</textarea></div>
+  <div class="field"><label for="fNote">📝 Designer notes</label><textarea id="fNote" data-f="note" rows="2" placeholder="Lore, ideas, balance notes. Exported with the data, never printed">${esc(c.note || '')}</textarea></div>
   <details class="adv"><summary>More: art credit, file name, card ID</summary>
   <div class="field"><label for="fArtist">Art credit</label><input type="text" id="fArtist" data-f="artist" value="${esc(c.artist || '')}" maxlength="40" placeholder="Who made the art?"></div>
   <div class="field"><label for="fFile">Export file name</label><input type="text" id="fFile" data-f="fileName" value="${esc(c.fileName || '')}" maxlength="40" placeholder="${esc(c.id)}"><div class="help">Used for this card's PNG files. Blank = the card ID.</div></div>
@@ -1534,17 +1580,17 @@ function secStats(c) {
   <div class="btnrow"><button class="btn" data-act="dup">⧉ Duplicate</button><button class="btn" data-act="moveUp">◀ Earlier</button><button class="btn" data-act="moveDown">Later ▶</button><button class="btn danger-btn" data-act="del">🗑 Delete</button></div>`;
 }
 function secBrand(c) {
-  if (c.type === 'ACT') return `<p class="muted">Actions don't belong to a brand — their family sets the icon (▲ direct, ⬢ control). Switch to <b>Character</b> in Stats to pick a brand.</p>`;
+  if (c.type === 'ACT') return `<p class="muted">Actions don't belong to a brand — their family sets the icon (💥 direct, 🎛️ control). Switch to <b>Character</b> in Stats to pick a brand.</p>`;
   const chips = (field, list) => list.length ? `<div class="chips">${list.map(t => `<button type="button" class="chip" data-list="${field}" data-item="${esc(t)}" aria-pressed="${(c[field] || []).includes(t)}">${esc(t)}</button>`).join('')}</div>` : '<p class="help">None yet — add one below.</p>';
   const partnerPool = [...new Set([...P.tags, ...(c.partners || [])])];
   const backers = P.cards.filter(o => compatible(c, o)), hosts = P.cards.filter(o => compatible(o, c));
   const names = l => l.length ? l.slice(0, 6).map(o => esc(o.name)).join(', ') + (l.length > 6 ? ` +${l.length - 6} more` : '') : 'none yet';
   return `
-  <div class="field"><span class="lbl">Brand (Origin)</span>
+  <div class="field"><span class="lbl">🏢 Brand (Origin)</span>
     <div class="brand-tiles">${P.brands.map(b => `<button type="button" class="brand-tile" data-brand="${esc(b.name)}" aria-pressed="${c.origin === b.name}">${shapeIcon(b.shape, b.color || 'currentColor', 30)}<span>${esc(b.name)}</span></button>`).join('')}
     <button type="button" class="brand-tile" data-act="newBrand"><span style="font-size:22px">＋</span><span>New brand</span></button></div></div>
-  <div class="field"><span class="lbl">Allegiances — what this card <i>is</i></span>${chips('tags', P.tags)}</div>
-  <div class="field"><span class="lbl">Partners — who can Backup this card</span>${chips('partners', partnerPool)}
+  <div class="field"><span class="lbl">🎌 Allegiances — what this card <i>is</i></span>${chips('tags', P.tags)}</div>
+  <div class="field"><span class="lbl">🤝 Partners — who can Backup this card</span>${chips('partners', partnerPool)}
     <div class="help">Same-brand characters can always Backup each other (except Unassigned).</div></div>
   <div class="field"><div class="inline"><input type="text" id="newTagIn" placeholder="New allegiance, e.g. Gamers" maxlength="24"><button class="btn" data-act="newTag">＋ Add</button></div></div>
   <div class="idea"><b>🤝 Backup matchmaking</b><div class="small" style="margin-top:4px">${BACKUP_RULE}<br>Can be backed up by (${backers.length}): ${names(backers)}<br>Can back up (${hosts.length}): ${names(hosts)}</div></div>`;
@@ -1556,18 +1602,18 @@ function secAbility(c) {
   <div class="idea field"><span class="lbl">✨ Say it in plain English</span>
     <div class="inline"><input type="text" id="ideaIn" placeholder="e.g. when this enters, deal 2 damage to an enemy" maxlength="160"><button class="btn primary" data-act="interpret">Interpret</button></div>
     <div class="help">Maps your words onto the game's effects. If it can't, it saves the idea to Designer notes so the team can add it.</div></div>
-  ${c.type === 'CHA' ? `<div class="field"><span class="lbl">Trigger</span><div class="seg wide" style="flex-direction:column">${Object.entries(TIMINGS).map(([k, v]) => segBtn('timing', k, v, c.timing)).join('')}</div></div>` : ''}
+  ${c.type === 'CHA' ? `<div class="field"><span class="lbl">⏱️ Trigger</span><div class="seg wide" style="flex-direction:column">${Object.entries(TIMINGS).map(([k, v]) => segBtn('timing', k, v, c.timing)).join('')}</div></div>` : ''}
   ${needsEffect && e ? `
-    <div class="field"><label for="fKind">Effect</label><select id="fKind" data-f="effect.kind">${Object.entries(EFFECTS).map(([k, v]) => `<option value="${k}" ${e.kind === k ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div>
-    <div class="field"><span class="lbl">Target</span><div class="seg wide">${spec.targets.map(t => segBtn('effect.target', t, TARGET_LABELS[t], e.target)).join('')}</div></div>
-    <div class="two">${spec.amount ? `<div class="field"><span class="lbl">Amount</span>${stepper('effect.amount', e.amount, 'Amount')}</div>` : ''}
-    ${c.timing === 'activated' ? `<div class="field"><span class="lbl">Ability cost (SP)</span>${stepper('abilityCost', c.abilityCost, 'Ability cost')}</div>` : ''}</div>` : ''}
-  ${c.type === 'CHA' ? `<div class="field"><label for="fPassive">Passive trait</label><select id="fPassive" data-f="passive">${Object.entries(PASSIVES).map(([k, v]) => `<option value="${k}" ${(c.passive || '') === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+    <div class="field"><label for="fKind">💥 Effect</label><select id="fKind" data-f="effect.kind">${Object.entries(EFFECTS).map(([k, v]) => `<option value="${k}" ${e.kind === k ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div>
+    <div class="field"><span class="lbl">🎯 Target</span><div class="seg wide">${spec.targets.map(t => segBtn('effect.target', t, TARGET_LABELS[t], e.target)).join('')}</div></div>
+    <div class="two">${spec.amount ? `<div class="field"><span class="lbl">🔢 Amount</span>${stepper('effect.amount', e.amount, 'Amount')}</div>` : ''}
+    ${c.timing === 'activated' ? `<div class="field"><span class="lbl">⚡ Ability cost (SP)</span>${stepper('abilityCost', c.abilityCost, 'Ability cost')}</div>` : ''}</div>` : ''}
+  ${c.type === 'CHA' ? `<div class="field"><label for="fPassive">♾️ Passive trait</label><select id="fPassive" data-f="passive">${Object.entries(PASSIVES).map(([k, v]) => `<option value="${k}" ${(c.passive || '') === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
     ${c.passive === 'effectWard' ? `<div class="field"><span class="lbl">Ward amount</span>${stepper('ward', c.ward, 'Ward')}</div>` : ''}` : ''}
-  <div class="field"><span class="lbl">Rules text</span><div class="seg wide" style="margin-bottom:6px">${segBtn('textMode', 'auto', '⚙ Auto from effect', c.textMode)}${segBtn('textMode', 'custom', '✍ Write my own', c.textMode)}</div>
+  <div class="field"><span class="lbl">📜 Rules text</span><div class="seg wide" style="margin-bottom:6px">${segBtn('textMode', 'auto', '⚙ Auto from effect', c.textMode)}${segBtn('textMode', 'custom', '✍ Write my own', c.textMode)}</div>
     <textarea data-f="text" rows="3" ${c.textMode === 'auto' ? 'readonly' : ''}>${esc(c.text)}</textarea>
     <div class="help">${c.textMode === 'auto' ? 'Written for you from the effect, so text and gameplay always agree.' : 'Your wording is printed; the game still runs the effect above.'}</div></div>
-  <div class="field"><label for="fBanner">Banner words <span class="muted">(looks only — the category stays ${esc(TRIGGERS[triggerOf(c)].label)})</span></label><input type="text" id="fBanner" data-f="layout.banner" value="${esc(c.layout.banner || '')}" maxlength="28" placeholder="${esc(c.type === 'CHA' ? TIMING_LABEL[c.timing] : 'ACT / RESOLVE & DISCARD')}"></div>`;
+  <div class="field"><label for="fBanner">✨ Ability name <span class="muted">(looks only — the category stays ${esc(TRIGGERS[triggerOf(c)].label)})</span></label><input type="text" id="fBanner" data-f="layout.banner" value="${esc(c.layout.banner || '')}" maxlength="28" placeholder="${esc(c.type === 'CHA' ? TIMING_LABEL[c.timing] : 'ACT / RESOLVE & DISCARD')}"></div>`;
 }
 const GRAD_DEFAULT = { accent: '#ceacff', paper: '#ffe7c2', border: '#3b1060' };
 const gradToggle = (f, v2) => `<label class="inline small"><input type="checkbox" data-grad="${f}" ${v2 ? 'checked' : ''}> fade to</label>${v2 ? `<input type="color" data-f="layout.${f}2" value="${esc(v2)}" aria-label="${f} gradient end">` : ''}`;
@@ -1730,7 +1776,7 @@ async function logoFromFile(file) {
 $('#logoPick').addEventListener('change', async e => {
   const file = e.target.files[0]; e.target.value = '';
   const b = logoTarget === 'back' ? P.back : P.brands[logoTarget]; if (!file || !b) return;
-  try { const id = newId('a'); P.assets[id] = await logoFromFile(file); b.logo = id; save(); renderBrands(); toast(logoTarget === 'back' ? '🏷 Logo added to the card back' : `🏷 Logo set for ${b.name}`); }
+  try { const id = newId('a'); P.assets[id] = await logoFromFile(file); b.logo = id; if (logoTarget === 'back' && P.back.layout === 'wordmark' && ui.folder === 'back') P.back.layout = 'logo'; save(); if (ui.view === 'library') renderLibrary(); else renderBrands(); toast(logoTarget === 'back' ? '🏷 Logo added to the card back' : `🏷 Logo set for ${b.name}`); }
   catch (err) { toast(err.message, true); }
 });
 function renderBrands() {
@@ -1740,7 +1786,8 @@ function renderBrands() {
     <div class="two"><div class="field"><label for="sCode">Set code</label><input type="text" id="sCode" data-set="setCode" value="${esc(P.setCode || '')}" maxlength="12"></div>
     <div class="field"><label for="sCred">Made by</label><input type="text" id="sCred" data-set="credits" value="${esc(P.credits || '')}" maxlength="60"></div></div>
     <p class="muted small">${P.cards.length} cards · ${P.cards.filter(c => c.type === 'CHA').length} CHA · ${P.cards.filter(c => c.type === 'ACT').length} ACT · ${P.brands.length} brands · ${P.tags.length} allegiances · ${P.folders.length} decks</p>
-    <div class="field"><span class="lbl">Card back <span class="muted">(used in TTS sheets, print and playtest)</span></span>
+    <div class="field"><span class="lbl">Card back</span>
+      <div class="backedit"><div class="backprev">${backMarkup(0.26, true)}</div><div class="backctl"><p class="small">The card back has its own designer now, next to your decks.</p><button class="btn small primary" id="openBack">🎴 Design the card back</button></div></div></div><div hidden>
       <div class="backedit"><div class="backprev" id="backPrev">${backMarkup(0.34, true)}</div>
       <div class="backctl"><div class="two">${bcol('bg', 'Background')}${bcol('frame', 'Frame')}${bcol('stripe', 'Stripes')}${bcol('ink', 'Text')}</div>
         <label class="field" style="display:block;margin-top:8px"><span class="lbl">Tagline</span><input type="text" data-back="tagline" value="${esc(bk.tagline)}" maxlength="40"></label>
@@ -1794,6 +1841,7 @@ $('#view-brands').addEventListener('click', async e => {
   if (b.id === 'addTag') { const n = await promptText('New allegiance', 'Allegiance name (e.g. "Gamers")'); if (n) { if (P.tags.includes(n)) toast('Already exists.', true); else { P.tags.push(n); save(); renderBrands(); } } }
   if (d.bclear) { P.brands[+d.bclear].color = ''; save(); renderBrands(); }
   if (d.blogo) { logoTarget = +d.blogo; $('#logoPick').click(); }
+  if (b.id === 'openBack') { ui.folder = 'back'; return setView('library'); }
   if (b.id === 'backLogo') { logoTarget = 'back'; $('#logoPick').click(); }
   if (b.id === 'backLogoDel') { delete P.back.logo; save(); renderBrands(); }
   if (b.id === 'backReset') { const logo = P.back.logo; P.back = { ...DEFAULT_BACK, ...(logo ? { logo } : {}) }; save(); renderBrands(); toast('Card back reset'); }
@@ -1854,18 +1902,102 @@ async function playtestFile(decks, label) {
   download(new Blob([JSON.stringify(data)], { type: 'application/json' }), `${slug(label || P.setName)}.lftdeck.json`);
   toast(`🕹 Playtest file ready (${cards.length} cards with art). On the table: DECK → Load a deck → Import deck file.`);
 }
-// Real-size print sheet: 9 poker-size cards (63 × 88 mm) per page with cut lines.
+// ---- IRL print: pick paper, card size, bleed, gaps and cut guides, then print at actual size.
+let printOpts = { ...PRINT_DEFAULTS };
+try { Object.assign(printOpts, JSON.parse(lsGet('forge-print') || '{}')); } catch { }
+function printForm(o) {
+  const opt = (map, cur) => Object.entries(map).map(([k, v]) => `<option value="${k}" ${cur === k ? 'selected' : ''}>${esc(v.label)}</option>`).join('');
+  return `<div class="irl">
+    <div class="irl-row"><label>📄 Paper<select name="paper">${opt(PAPERS, o.paper)}</select></label>
+      <label>🃏 Card size<select name="card">${opt(CARD_SIZES, o.card)}<option value="custom" ${o.card === 'custom' ? 'selected' : ''}>Custom size…</option></select></label></div>
+    <div class="irl-row irl-custom" ${o.card === 'custom' ? '' : 'hidden'}><label>Width (mm)<input type="number" name="cw" min="20" max="200" step="0.5" value="${o.cw}"></label><label>Height (mm)<input type="number" name="ch" min="20" max="300" step="0.5" value="${o.ch}"></label></div>
+    <div class="irl-row"><label>🩸 Bleed<select name="bleed">${[[0, 'None'], [3, '3 mm (print shops)'], [3.175, '1/8 in (3.2 mm)']].map(([v, l]) => `<option value="${v}" ${+o.bleed === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      <label>↔ Space between cards<select name="gap">${[[0, 'None (shared cuts, fastest)'], [2, '2 mm'], [4, '4 mm'], [6, '6 mm']].map(([v, l]) => `<option value="${v}" ${+o.gap === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div>
+    <div class="irl-row"><label>📏 Page margin<select name="margin">${[[5, '5 mm'], [6, '6 mm'], [10, '10 mm'], [12.7, '½ in']].map(([v, l]) => `<option value="${v}" ${+o.margin === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      <label>🔁 Card backs<select name="backs"><option value="long" ${o.backs === 'long' ? 'selected' : ''}>Double-sided · long edge</option><option value="short" ${o.backs === 'short' ? 'selected' : ''}>Double-sided · short edge</option><option value="sheet" ${o.backs === 'sheet' ? 'selected' : ''}>Backs on their own pages</option><option value="none" ${o.backs === 'none' ? 'selected' : ''}>No backs</option></select></label></div>
+    <fieldset class="irl-checks"><legend>✂️ Cutting guides</legend>
+      <label><input type="checkbox" name="crop" ${o.marks === 'crop' ? 'checked' : ''}> Crop marks in the margins (line up a ruler or guillotine)</label>
+      <label><input type="checkbox" name="outline" ${o.outline ? 'checked' : ''}> Thin cut outline around each card (scissors)</label></fieldset>
+    <p class="irl-sum" id="irlSum"></p>
+    <p class="muted small">Print at <b>100% / Actual size</b> with scaling off. Poker size matches the card art exactly; other sizes keep the art whole and fill the rest with the card's border colour.</p></div>`;
+}
+function printDialogBody(o) {
+  return `<div class="irl-wrap">${printForm(o)}<div class="irl-prev" id="irlPrev" aria-live="polite"></div></div>`;
+}
+// A to-scale picture of sheet 1 (front and back), redrawn as the options change.
+function printPreview(cards, o) {
+  const L = printLayout(o); if (!L.perPage) return '';
+  const chunk = cards.slice(0, L.perPage), front = printCells(L, 'front'), back = printCells(L, 'back', o.backs === 'short' ? 'short' : 'long');
+  const thumb = c => { const k = thumbKey(c, P.cards.indexOf(c)); return thumbURL.get(k) || (thumbStore[k] ? (thumbURL.set(k, URL.createObjectURL(dataURLtoBlob(thumbStore[k]))), thumbURL.get(k)) : ''); };
+  const marks = () => {
+    if (o.marks !== 'crop') return '';
+    const len = Math.min(5, L.margin - 1), gh = L.rows * L.cellH + (L.rows - 1) * L.gap, gw = L.cols * L.cellW + (L.cols - 1) * L.gap, out = [];
+    for (let c = 0; c < L.cols; c++) for (const x of [L.x0 + c * (L.cellW + L.gap) + L.bleed, L.x0 + c * (L.cellW + L.gap) + L.bleed + L.cardW]) out.push(`<path d="M${x} ${L.y0 - len - 1}v${len}M${x} ${L.y0 + gh + 1}v${len}"/>`);
+    for (let r = 0; r < L.rows; r++) for (const y of [L.y0 + r * (L.cellH + L.gap) + L.bleed, L.y0 + r * (L.cellH + L.gap) + L.bleed + L.cardH]) out.push(`<path d="M${L.x0 - len - 1} ${y}h${len}M${L.x0 + gw + 1} ${y}h${len}"/>`);
+    return `<g stroke="#000" stroke-width=".25">${out.join('')}</g>`;
+  };
+  const card = (pos, inner, bg) => `<rect x="${pos.x}" y="${pos.y}" width="${L.cellW}" height="${L.cellH}" fill="${esc(bg)}"/>${inner(pos.x + L.bleed, pos.y + L.bleed)}${o.outline ? `<rect x="${pos.x + L.bleed}" y="${pos.y + L.bleed}" width="${L.cardW}" height="${L.cardH}" fill="none" stroke="#666" stroke-width=".25" stroke-dasharray="1 1"/>` : ''}`;
+  const frontInner = c => (x, y) => { const u = thumb(c); return u ? `<image href="${u}" x="${x}" y="${y}" width="${L.cardW}" height="${L.cardH}" preserveAspectRatio="xMidYMid meet"/>` : `<rect x="${x}" y="${y}" width="${L.cardW}" height="${L.cardH * 0.22}" fill="${esc(accentFor(c))}"/><text x="${x + 2}" y="${y + 6}" font-size="4" font-family="Arial" font-weight="800">${esc(c.name.slice(0, 18))}</text>`; };
+  const backSvg = backMarkup(1, true);
+  const backInner = (x, y) => backSvg.replace('<svg ', `<svg x="${x}" y="${y}" preserveAspectRatio="xMidYMid meet" `).replace(/width="500" height="700"/, `width="${L.cardW}" height="${L.cardH}"`);
+  const page = (label, body) => `<figure><svg viewBox="0 0 ${L.pageW} ${L.pageH}" role="img" aria-label="${esc(label)}"><rect width="${L.pageW}" height="${L.pageH}" fill="#fff"/><rect x="${L.margin}" y="${L.margin}" width="${L.pageW - L.margin * 2}" height="${L.pageH - L.margin * 2}" fill="none" stroke="#c9cdd8" stroke-width=".4" stroke-dasharray="2 2"/>${body}${marks()}</svg><figcaption>${label}</figcaption></figure>`;
+  const fronts = page('Sheet 1 · front', chunk.map((c, k) => card(front[k], frontInner(c), c.layout.border || '#171724')).join(''));
+  const backs = o.backs === 'none' ? '' : page(o.backs === 'sheet' ? 'Backs page' : `Sheet 1 · back (flip ${o.backs} edge)`, chunk.map((c, k) => card(o.backs === 'sheet' ? front[k] : back[k], backInner, P.back.bg)).join(''));
+  return fronts + backs;
+}
+function readPrintForm() {
+  const f = $('#modalForm'), v = n => f.querySelector(`[name="${n}"]`);
+  return { paper: v('paper').value, card: v('card').value, cw: +v('cw').value || 63, ch: +v('ch').value || 88, bleed: +v('bleed').value, gap: +v('gap').value, margin: +v('margin').value, backs: v('backs').value, marks: v('crop').checked ? 'crop' : 'none', outline: v('outline').checked };
+}
 async function printSheet(cards, label) {
   if (!cards.length) return toast('No cards to print.', true);
+  const summary = () => {
+    const o = readPrintForm(), L = printLayout(o), pages = L.perPage ? Math.ceil(cards.length / L.perPage) : 0;
+    $('.irl-custom').hidden = o.card !== 'custom';
+    $('#irlPrev').innerHTML = printPreview(cards, o);
+    $('#irlSum').innerHTML = L.perPage ? `<b>${L.perPage} cards per sheet</b> (${L.cols} × ${L.rows}, ${L.landscape ? 'landscape' : 'portrait'}) · ${cards.length} card${cards.length === 1 ? '' : 's'} = <b>${pages} sheet${pages === 1 ? '' : 's'}</b>${o.backs === 'none' ? '' : ` + ${pages} backs`}` : '⚠ That card size doesn’t fit this paper. Pick bigger paper or a smaller card.';
+  };
+  const done = ask({ title: `🖨 Print in real life · ${esc(label)}`, body: printDialogBody(printOpts), wide: true, buttons: [{ label: 'Cancel', value: '' }, { label: '↺ Defaults', value: 'reset' }, { label: '🖨 Make print sheet', value: 'go', primary: true }] });
+  const live = new AbortController(); // listeners live only while this dialog is open
+  $('#modalForm').addEventListener('input', summary, { signal: live.signal }); $('#modalForm').addEventListener('change', summary, { signal: live.signal }); summary();
+  const v = await done; live.abort();
+  if (v === 'reset') { printOpts = { ...PRINT_DEFAULTS }; lsSet('forge-print', JSON.stringify(printOpts)); return printSheet(cards, label); }
+  if (v !== 'go') return;
+  printOpts = readPrintForm(); lsSet('forge-print', JSON.stringify(printOpts));
+  const L = printLayout(printOpts); if (!L.perPage) return toast('That card size doesn’t fit this paper.', true);
   const w = window.open('', '_blank'); if (!w) return toast('Your browser blocked the print window. Allow pop-ups for this site and try again.', true);
   w.document.write('<p style="font:16px Arial;padding:20px">Preparing your cards…</p>');
   const urls = [];
   await withProgress('🖨 Preparing the print sheet', async step => {
     for (let i = 0; i < cards.length; i++) { step(i, cards.length, `Card ${i + 1}/${cards.length}`); urls.push(await blobToDataURL(await toImage(exportSVG(cards[i], P.cards.indexOf(cards[i]), 2), W * 2, H * 2, 'image/jpeg', 0.92))); }
   });
-  const pages = []; for (let i = 0; i < urls.length; i += 9) pages.push(urls.slice(i, i + 9));
+  const backUrl = printOpts.backs === 'none' ? '' : await blobToDataURL(await toImage(backMarkup(2), W * 2, H * 2, 'image/jpeg', 0.92));
+  const mm = n => n.toFixed(2) + 'mm';
+  const cell = (pos, url, bg) => `<div class="cell" style="left:${mm(pos.x)};top:${mm(pos.y)};width:${mm(L.cellW)};height:${mm(L.cellH)};background:${esc(bg)}"><img src="${url}" style="left:${mm(L.bleed)};top:${mm(L.bleed)};width:${mm(L.cardW)};height:${mm(L.cardH)}" alt="">${printOpts.outline ? `<i style="left:${mm(L.bleed)};top:${mm(L.bleed)};width:${mm(L.cardW)};height:${mm(L.cardH)}"></i>` : ''}</div>`;
+  // Crop marks: every cut line gets a short tick in the margins, so a ruler or guillotine can line up.
+  const marks = () => {
+    if (printOpts.marks !== 'crop') return '';
+    const xs = new Set(), ys = new Set(), len = Math.min(5, L.margin - 1);
+    for (let c = 0; c < L.cols; c++) { const x = L.x0 + c * (L.cellW + L.gap) + L.bleed; xs.add(x.toFixed(2)); xs.add((x + L.cardW).toFixed(2)); }
+    for (let r = 0; r < L.rows; r++) { const y = L.y0 + r * (L.cellH + L.gap) + L.bleed; ys.add(y.toFixed(2)); ys.add((y + L.cardH).toFixed(2)); }
+    const gh = L.rows * L.cellH + (L.rows - 1) * L.gap, gw = L.cols * L.cellW + (L.cols - 1) * L.gap;
+    return [...xs].map(x => `<b style="left:${x}mm;top:${mm(L.y0 - len - 1)};width:0;height:${mm(len)}"></b><b style="left:${x}mm;top:${mm(L.y0 + gh + 1)};width:0;height:${mm(len)}"></b>`).join('')
+      + [...ys].map(y => `<b style="top:${y}mm;left:${mm(L.x0 - len - 1)};height:0;width:${mm(len)}"></b><b style="top:${y}mm;left:${mm(L.x0 + gw + 1)};height:0;width:${mm(len)}"></b>`).join('');
+  };
+  const sizeNote = `${printOpts.card === 'custom' ? `${L.cardW}×${L.cardH} mm` : CARD_SIZES[printOpts.card].label.replace(' (standard)', '')} · ${PAPERS[printOpts.paper].label} · print at 100%`;
+  const pages = [];
+  for (let i = 0; i < urls.length; i += L.perPage) {
+    const chunk = cards.slice(i, i + L.perPage), front = printCells(L, 'front'), back = printCells(L, 'back', printOpts.backs === 'short' ? 'short' : 'long');
+    pages.push(`<div class="page">${chunk.map((c, k) => cell(front[k], urls[i + k], c.layout.border || '#171724')).join('')}${marks()}<em>${esc(label)} · ${sizeNote} · sheet ${pages.length / (backUrl ? 2 : 1) + 1}</em></div>`);
+    if (backUrl) pages.push(`<div class="page backs">${chunk.map((c, k) => cell(printOpts.backs === 'sheet' ? front[k] : back[k], backUrl, P.back.bg)).join('')}${marks()}<em>${esc(label)} · backs${printOpts.backs === 'sheet' ? '' : ` (flip on ${printOpts.backs} edge)`}</em></div>`);
+  }
   w.document.open();
-  w.document.write(`<!doctype html><title>${esc(label)}: print sheet</title><style>@page{size:auto;margin:7mm}body{margin:0;font:13px Arial}.page{display:grid;grid-template-columns:repeat(3,63mm);grid-auto-rows:88mm;justify-content:center;break-after:page}.page:last-child{break-after:auto}.page img{width:63mm;height:88mm;display:block;outline:.2mm dashed #888;outline-offset:-.1mm}.hint{padding:10px;text-align:center;background:#fff3c4}@media print{.hint{display:none}}</style><div class="hint">Print at <b>100% / Actual size</b> on Letter or A4, then cut on the dashed lines. <button onclick="print()">🖨 Print</button></div>${pages.map(p => `<div class="page">${p.map(u => `<img src="${u}" alt="">`).join('')}</div>`).join('')}`);
+  w.document.write(`<!doctype html><title>${esc(label)}: print sheet</title><style>@page{size:${mm(L.pageW)} ${mm(L.pageH)};margin:0}*{box-sizing:border-box}body{margin:0;font:12px Arial;background:#888}
+    .page{position:relative;width:${mm(L.pageW)};height:${mm(L.pageH)};background:#fff;overflow:hidden;margin:0 auto 8mm;break-after:page}.page:last-child{break-after:auto}
+    .cell{position:absolute}.cell img{position:absolute;object-fit:contain}.cell i{position:absolute;outline:.15mm dashed #777;pointer-events:none}
+    .page b{position:absolute;border-left:.2mm solid #000;border-top:.2mm solid #000}.page em{position:absolute;left:${mm(L.margin)};bottom:1.2mm;font:6.5pt Arial;color:#777;font-style:normal}
+    .hint{position:sticky;top:0;z-index:2;padding:10px;text-align:center;background:#fff3c4;font:14px Arial}@media print{body{background:none}.hint{display:none}.page{margin:0}}</style>
+    <div class="hint">Print at <b>100% / Actual size</b>, scaling off, on <b>${esc(PAPERS[printOpts.paper].label)}</b>${backUrl && printOpts.backs !== 'sheet' ? `, double-sided (flip on <b>${printOpts.backs}</b> edge)` : ''}. <button onclick="print()">🖨 Print</button></div>${pages.join('')}`);
   w.document.close();
   setTimeout(() => { try { w.focus(); w.print(); } catch { } }, 700);
 }
@@ -2257,11 +2389,12 @@ function renderManual() {
       <li><b>Share or test it</b>: <b>🕹 Send to playtest</b> (playtest table or SAGA), <b>🖨 Print</b>, or <b>Share</b> → Download save file.</li></ol>
       <p>Everything saves automatically in this browser. Take a <b>📸 Snapshot</b> or <b>Download save file</b> before big changes.</p>`],
     ['card', '🃏 Anatomy of a card', `<div class="manual-card">${cardSVG(M_SAMPLE(), { project: P, uid: 'man' })}<ol>
-      <li><b>Type line</b>: CHA (Character) or ACT (Action).</li><li><b>Name</b> and <b>cost</b> in SP (0–10).</li>
+      <li><b>Type line</b>: CHA (Character) with its tier (💩 Shit Tier, 😐 Mid Tier, 👑 GOD Tier, 🕹️ 1337 Tier) and 😈 EXE if it is one, or ACT (Action).</li><li><b>Name</b> and <b>cost</b> in SP (0–10).</li>
       <li><b>Brand</b> (Origin): where a character comes from. Its logo can sit next to it.</li><li><b>Art window</b>: your art, clipped to this box.</li>
       <li><b>Banner</b>: the ability's trigger words (HEY, I'M HERE! / NAP TIEM! / BIG STINK!).</li><li><b>Rules text</b>, written for you from the ability, plus optional flavor.</li>
       <li><b>Partners</b>: who can Backup this card. <b>HP</b> for characters.</li></ol></div>`],
-    ['types', '🥊 Card types &amp; ability categories', table(['Filter', 'Means'], [['🃏 All', 'Every card'], ['🥊 CHA', 'Characters: stay in the ring, have HP'], ['⚡ ACT', 'Actions: resolve once, then discard']]) +
+    ['types', '🥊 Card types &amp; ability categories', table(['Filter', 'Means'], [['🃏 All', 'Every card'], ['🥊 CHA', 'Characters: stay in the ring, have HP'], ['⚡ ACT', 'Actions: resolve once, then discard']]) + table(['Tier', 'What it is'], Object.values(TIER_INFO).map(t => [`${t.icon} ${t.name}`, esc(t.blurb)])) + table(['Action family', 'What it is'], Object.values(ACT_INFO).map(a => [`${a.icon} ${a.name}`, esc(a.blurb)]))
+      + `<p><b>Ring space.</b> Your ring has 3 slots. A normal character takes 1, a <b>😈 EXE</b> takes 2 (so it can share the ring with one other character), and a <b>🕹️ 1337</b> card takes all 3: it must be your only character, and nothing else can come in while it's there. Backups don't take ring space and work the same on all of them: once per turn, +2 HP. The card's rules text says it too.</p>` +
       table(['Category', 'When it happens'], Object.values(TRIGGERS).map(t => [`${t.icon} ${t.short}`, esc(t.label)]))],
     ['abilities', '✨ Abilities &amp; mechanics', `<p>Pick a trigger, an effect, a target and an amount, or type it in plain English (tap the rules text on the card, or use the <b>Mechanics</b> tab) and the Forge maps it for you. If nothing matches, your idea is saved to the card's notes for the team.</p>` +
       table(['Effect', 'Can target'], Object.entries(EFFECTS).map(([k, e]) => [esc(e.label), e.targets.map(t => esc(TARGET_LABELS[t])).join(', ')])) +
@@ -2282,18 +2415,21 @@ function renderManual() {
       <li><b>Layers</b> panel: drag the dots to restack, hide 👁, lock 🔒, double-click to rename, and set opacity and blend mode (Multiply, Screen, Overlay…).</li>
       <li>The <b>dock</b> under the card changes with your selection. <b>Transform</b>: align buttons, Fill / Fit / Center, size, spin, opacity. <b>Style</b>: colour swatches, fonts, outlines, shape picker, masks and <b>✨ Remove background</b> (best on plain backgrounds; Strength tunes it, Original undoes it). <b>Adjust</b>: brightness, contrast, saturation, hue. <b>Effects</b>: drop shadow, glow, sticker outline.</li>
       <li><b>Design</b> tab: style presets, colors, gradients, fonts and holo foil. The rules check warns when text gets hard to read.</li>
-      <li><b>Brands</b> tab → Set Info: the set name printed on every card and the <b>card back</b> design.</li>
+      <li><b>🎴 Card back</b> (in the Decks list): presets, a big title, the built-in LOL, FIGHT TIEM! badge or your own logo, a pattern, an LFT watermark, colours and tagline. Playtest/SAGA files, the TTS sheet and print sheets pick it up automatically.</li>
+      <li><b>LOL, FIGHT TIEM! logo</b>: the <b>Logo</b> tool offers the built-in badge on any card, e.g. as a watermark.</li>
+      <li><b>Brands</b> tab → Set Info: the set name printed on every card.</li>
       <li>On PC, drag the side panel's edge to resize it.</li></ul>`],
     ['share', '📦 Saving, sharing &amp; testing', table(['Want to…', 'Use', 'You get'], [
       ['Hand one card to someone', 'Editor → <b>Share card</b>', 'A PNG with the card data hidden inside; drop it into any Forge'],
       ['Move your whole set / back up', 'Share → <b>Download save file</b>', '<code>.lftset.json</code>; open it anywhere to merge or replace'],
       ['Playtest online', 'Open a deck → <b>🕹 Send to playtest</b>', '<code>.lftdeck.json</code> with card art; drop it on SAGA, or on the playtest table: DECK → Load a deck → Import deck file. Opening it in a Forge brings back the cards (not the art)'],
-      ['Playtest on paper', '<b>🖨 Print</b> (deck, selection, or all)', '9 real-size cards per page with cut lines'],
+      ['Playtest on paper', '<b>🖨 Print</b> (deck, selection, or all)', 'Pick the paper (Letter, A4, Legal, Tabloid, A3, Super B), card size (Poker, Bridge, Mini Euro, Tarot, Jumbo or custom), bleed, spacing, crop marks or cut outlines, and backs for double-sided printing'],
       ['Tabletop Simulator (legacy)', 'Share → Export everything (ZIP), tick the TTS option', 'Deck sheet + back for a custom deck, and <code>data/cards.json</code> / <code>decks.json</code> for the scripted mod'],
       ['Work in a spreadsheet', 'Share → Spreadsheet', 'Excel template or CSV; drop it back in, stats update and art stays; or link a Google Sheet'],
       ['Undo a big mistake', 'Share → <b>📸 Snapshots</b>', 'Roll back to any snapshot; the Forge also keeps automatic and pre-update backups'],
     ])],
     ['keys', '⌨ Shortcuts', table(['Keys', 'Does'], [['Ctrl/⌘ + Z · Ctrl/⌘ + Y', 'Undo · redo (editor)'], ['Arrow keys (+Shift)', 'Nudge the selected layer 1 (10) px'], ['Delete / Backspace', 'Delete the selected layer'], ['Ctrl/⌘ + D', 'Duplicate the selected layer'], ['V · H', 'Move tool · pan tool (or hold Space)'], ['B · E', 'Draw · eraser'], ['I · T · S', 'Add image · text · shape'], ['L', 'Show / hide Layers'], ['F', 'Full canvas: hide everything but the card (F or Esc to exit)'], ['[ · ]', 'Send backward · bring forward'], ['Ctrl/⌘ + + / − / 0', 'Zoom the card in / out / fit (editor)'], ['Alt while dragging', 'Move without snapping'], ['Esc', 'Deselect, leave a card-text field or the brush, close help'], ['Ctrl/⌘ + scroll', 'Zoom the card grid'], ['Ctrl/⌘-click · Shift-click', 'Pick cards · pick a range']])],
+    ['history', '🕘 Version history', `<p class="muted small">Every release of the Card Forge, newest first. The same list lives in the repo as <code>docs/CARD_FORGE_VERSION_HISTORY.md</code>, and public releases are tagged in the lftcf repo.</p>` + CHANGELOG.map(r => `<h3 class="cl-h">v${r.v} “${esc(r.name)}” <small>${r.date}</small></h3><ul class="cl">${r.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>`).join('')],
     ['faq', '❓ Questions', `<dl><dt>Where are my cards stored?</dt><dd>In this browser on this device. Other devices and browsers don't see them until you open a save file there.</dd>
       <dt>The page says a new version is out.</dt><dd>Press <b>Reload now</b>. Your work is saved, and a backup is taken before any upgrade.</dd>
       <dt>It says the Forge is open in another tab.</dt><dd>Use one tab at a time; a tab that falls behind stops saving so it can't overwrite newer work.</dd>
@@ -2314,6 +2450,7 @@ const HELP = {
     ['#grid', 'Tap to edit · drag into decks', 'Tap a card to edit it. Drag it onto a deck (on touch, hold it first). Drop a picture on a card to make it that card’s art.'],
     ['.libbar', 'Find stuff', 'Search, show only CHA or ACT, or open ⚙ Filters for tier, brand, allegiance, ability and sort.'],
     ['#selectBtn', 'Select several', 'Add many cards to a deck, duplicate, export or delete them at once.'],
+    ['[data-folder="back"]', 'Card back', 'Design the back once (looks, LFT badge, your logo, watermark). Every export uses it automatically.'],
   ] },
   editor: { title: 'Designing a card', flow: 1, steps: [
     ['#stage', 'Tap the card to change it', 'Tap the name, cost, HP, brand, ability, rules or partners and edit them in the bar under the card. Tap an empty art window to add a picture. Drag art to move it; white corners resize, the yellow dot spins.'],
@@ -2427,6 +2564,13 @@ $('#grid').addEventListener('click', e => {
   const nb = e.target.closest('[data-new]'); if (nb) return newFromButton(nb.dataset.new);
   const act = e.target.closest('[data-act]')?.dataset.act;
   if (act === 'clearFilters') return clearFilters();
+  const bks = e.target.closest('[data-bkset]'); if (bks) { P.back[bks.dataset.bkset] = bks.dataset.v; save(); return renderBackView(); }
+  const bkp = e.target.closest('[data-bkpreset]'); if (bkp) { Object.assign(P.back, BACK_PRESETS[bkp.dataset.bkpreset]); save(); return renderBackView(); }
+  const bka = e.target.closest('[data-bkact]')?.dataset.bkact;
+  if (bka === 'logo') { logoTarget = 'back'; return $('#logoPick').click(); }
+  if (bka === 'logoDel') { delete P.back.logo; if (P.back.layout === 'logo') P.back.layout = 'wordmark'; save(); return renderBackView(); }
+  if (bka === 'reset') { const logo = P.back.logo; P.back = { ...DEFAULT_BACK, ...(logo ? { logo } : {}) }; save(); renderBackView(); return toast('Card back reset'); }
+  if (bka === 'png') return (async () => { download(await toPNG(backMarkup(2), W * 2, H * 2), `${slug(P.setName)}-back.png`); toast('⬇ Card back downloaded (1000×1400)'); })();
   if (act === 'loadBase') return loadBase();
   if (act === 'openHelp') return openHelp();
   const tr = e.target.closest('[data-trash-restore]'); if (tr) return restoreFromTrash([+tr.dataset.trashRestore]);

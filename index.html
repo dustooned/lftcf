@@ -48,7 +48,7 @@
         <div class="libbar">
           <input id="q" type="search" placeholder="Search cards&hellip;" aria-label="Search cards">
           <div class="seg" id="fType" role="group" aria-label="Card type">
-            <button data-v="all" title="All cards">All</button><button data-v="CHA" title="Characters">&#129354; CHA</button><button data-v="ACT" title="Actions">&#9889; ACT</button>
+            <button data-v="all" title="All cards">All</button><button data-v="CHA" title="Characters">&#129354; CHA</button><button data-v="ACT" title="Actions">&#9889; ACT</button><button data-v="EXE" title="EXE: takes two ring slots">😈 EXE</button>
           </div>
           <button class="btn" id="moreFilters" aria-expanded="false" aria-controls="filters">&#9881; Filters<span id="fCount" class="fbadge" hidden></span></button>
           <span class="spacer"></span>
@@ -56,10 +56,10 @@
           <button class="btn" id="selectBtn" aria-pressed="false">&#9745; Select</button>
         </div>
         <div class="filters" id="filters" hidden>
-          <select id="fTier" aria-label="Tier"><option value="all">Any tier</option><option value="low">Low</option><option value="mid">Mid</option><option value="high">High</option></select>
+          <select id="fTier" aria-label="Tier"><option value="all">Any tier</option><option value="low">💩 Shit Tier</option><option value="mid">😐 Mid Tier</option><option value="high">👑 GOD Tier</option><option value="leet">🕹️ 1337 Tier</option></select>
           <select id="fBrand" aria-label="Brand"></select>
           <select id="fTag" aria-label="Allegiance"></select>
-          <select id="fTrig" aria-label="Ability type"><option value="all">Any ability</option><option value="entry">👋 HEY, I'M HERE!</option><option value="activated">❄️ NAP TIEM!</option><option value="passive">💨 BIG STINK!</option><option value="none">No ability</option><option value="act-direct">▲ Direct action</option><option value="act-control">⬢ Control action</option></select>
+          <select id="fTrig" aria-label="Ability type"><option value="all">Any ability</option><option value="entry">🎉 On enter</option><option value="activated">❄️ Activated</option><option value="passive">♾️ Passive</option><option value="none">No ability</option><option value="act-direct">💥 Direct action</option><option value="act-control">🎛️ Control action</option></select>
           <select id="fSort" aria-label="Sort"><option value="num">Sort: #</option><option value="cost">Sort: cost</option><option value="name">Sort: name</option><option value="brand">Sort: brand</option><option value="trigger">Sort: ability</option></select>
           <button class="link small" id="clearFilters">Clear filters</button>
         </div>
@@ -149,7 +149,7 @@
       <div class="pad">
         <div class="big-actions">
           <button class="big-act primary" id="dlPlay"><span class="ba-ic">&#128377;</span><b>Send to playtest</b><small>Every deck with its card art, for the playtest table or SAGA</small></button>
-          <button class="big-act" id="printAll"><span class="ba-ic">&#128424;</span><b>Print</b><small>9 real-size cards per page, with cut lines</small></button>
+          <button class="big-act" id="printAll"><span class="ba-ic">&#128424;</span><b>Print (IRL)</b><small>Your paper and card size, bleed, crop marks and backs</small></button>
           <button class="big-act" id="dlSave"><span class="ba-ic">&#128190;</span><b>Download save file</b><small>Back up your set or move it to another device</small></button>
           <button class="big-act" id="openFile"><span class="ba-ic">&#128194;</span><b>Open a file</b><small>Saves, deck files, card PNGs or spreadsheets. Dropping files on the page works too.</small></button>
         </div>
@@ -240,7 +240,7 @@
 
 <div id="dropTray" class="drop-tray" hidden aria-live="polite"></div>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
-<dialog id="modal"><form method="dialog" id="modalForm"></form></dialog>
+<dialog id="modal"><form method="dialog" id="modalForm" novalidate></form></dialog>
 <input type="file" id="filePick" hidden multiple accept=".json,.zip,.png,.jpg,.jpeg,.gif,.webp,.csv,.xlsx,.xls,.ods,image/*">
 <input type="file" id="imgPick" hidden accept="image/*">
 <input type="file" id="cardPicPick" hidden multiple accept="image/*">
